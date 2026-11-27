@@ -7,6 +7,8 @@ use oxy_mesh::{Mesh, catmull_clark};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 const SIDES: usize = 8;
+/// An incoming link plus five digits fits at one joint.
+const MAX_QUAD_JOINT_LINKS: usize = 6;
 pub const MAX_QUAD_SUBDIVISION: u8 = 2;
 const MAX_SUBDIVIDED_FACES: usize = 16_384;
 /// Default Resolution keeps one ring per sphere (historical cage density).
@@ -52,7 +54,9 @@ impl std::fmt::Display for QuadSkinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidArmature => "The armature needs at least two valid, distinct joints",
-            Self::UnsupportedBranching => "Quad skin supports up to three links at each joint",
+            Self::UnsupportedBranching => {
+                return write!(f, "Quad skin supports up to {MAX_QUAD_JOINT_LINKS} links at each joint");
+            }
             Self::CrowdedLinks => "The links are too short or close together for the quad skin",
             Self::InvalidSurface => "The quad skin would overlap or produce invalid faces",
             Self::SubdivisionBudget => {
@@ -64,7 +68,7 @@ impl std::fmt::Display for QuadSkinError {
 
 impl std::error::Error for QuadSkinError {}
 
-/// Build a closed polygon cage around chains and connected three-way junctions.
+/// Build a closed polygon cage around chains and connected junctions.
 /// Use `Cage::build_mesh` to keep the polygon boundaries in the sculpt mesh.
 pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<Cage, QuadSkinError> {
     let blend = if opts.blend.is_finite() { opts.blend.clamp(0.0, 1.0) } else { 0.5 };
@@ -83,14 +87,19 @@ pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<
         neighbors[child].push(parent);
         neighbors[parent].push(child);
     }
-    if neighbors.iter().any(|adjacent| adjacent.len() > 3) {
+    if neighbors.iter().any(|adjacent| adjacent.len() > MAX_QUAD_JOINT_LINKS) {
         return Err(UnsupportedBranching);
     }
 
     let mut cage = Cage::default();
     let mut ports = vec![Vec::new(); spheres.len()];
-    for (joint, adjacent) in neighbors.iter().enumerate().filter(|(_, n)| n.len() == 3) {
-        ports[joint] = junction_ports(&mut cage, spheres, spheres[joint], adjacent, blend)?;
+    for (joint, adjacent) in neighbors.iter().enumerate().filter(|(_, n)| n.len() >= 3) {
+        let origin = spheres[joint];
+        ports[joint] = if adjacent.len() == 3 {
+            fork_ports(&mut cage, spheres, origin, adjacent, blend)?
+        } else {
+            fan_ports(&mut cage, spheres, &neighbors, origin, adjacent, blend)?
+        };
     }
     let tree = SweepTree { spheres, neighbors: &neighbors, ports: &ports, resolution };
     if ports.iter().any(|rings| !rings.is_empty()) {
@@ -155,7 +164,7 @@ pub fn quad_skin_mesh(armature: &Armature, opts: QuadSkinOptions) -> Result<Mesh
     cage.build_mesh().ok_or(QuadSkinError::InvalidSurface)
 }
 
-fn junction_ports(
+fn fork_ports(
     cage: &mut Cage,
     spheres: &[Sphere],
     origin: Sphere,
@@ -193,8 +202,153 @@ fn junction_ports(
         }
         ports.push(add_ring(cage, center, radius, direction, axis));
     }
-    join_ports(cage, &ports, origin.center)?;
+    join_ports(cage, &ports, origin.center, &[])?;
     Ok(ports)
+}
+
+fn fan_ports(
+    cage: &mut Cage,
+    spheres: &[Sphere],
+    neighbors: &[Vec<usize>],
+    origin: Sphere,
+    branches: &[usize],
+    blend: f32,
+) -> Result<Vec<Section>, QuadSkinError> {
+    let directions: Vec<_> = branches.iter().map(|&i| (spheres[i].center - origin.center).normalize()).collect();
+    // A shared plane keeps the ring phases matched on both sides of a mirrored
+    // palm. Pick the best-conditioned pair in a planar or nearly planar fan.
+    let mut basis = Vec3::ZERO;
+    for (i, &a) in directions.iter().enumerate() {
+        for &b in &directions[..i] {
+            let candidate = a.cross(b);
+            if candidate.length_squared() > basis.length_squared() {
+                basis = candidate;
+            }
+        }
+    }
+    if basis == Vec3::ZERO {
+        return Err(QuadSkinError::CrowdedLinks);
+    }
+    let basis = basis.normalize();
+
+    // Use the narrower end of each link for the socket. The sweep still
+    // reaches each sphere at its supplied radius.
+    let radii: Vec<_> = branches.iter().map(|&i| origin.radius.min(spheres[i].radius)).collect();
+    let limits: Vec<_> = branches
+        .iter()
+        .map(|&i| {
+            let share = match neighbors[i].len() {
+                3 => 0.35, // The existing fork can use up to 0.64 from the other end.
+                4.. => 0.48,
+                _ => 0.84,
+            };
+            share * spheres[i].center.distance(origin.center)
+        })
+        .collect();
+    let minimum = origin.radius * (0.5 + 0.35 * blend);
+    let clearance = origin.radius * (0.002 + 0.006 * blend);
+    // A tight fan can use narrower sockets and widen along the digit.
+    // Apply the taper together to neighboring links so one wide socket
+    // cannot push every other collar past the end of a shorter digit.
+    let close: Vec<_> = directions
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| directions.iter().enumerate().any(|(j, &b)| i != j && a.dot(b) > 0.5))
+        .collect();
+    let (radii, offsets) = [1.0, 0.82, 0.66]
+        .into_iter()
+        .find_map(|scale| {
+            let radii: Vec<_> =
+                radii.iter().zip(&close).map(|(&radius, &close)| if close { radius * scale } else { radius }).collect();
+            fit_fan_offsets(&directions, &radii, &limits, minimum, clearance).map(|offsets| (radii, offsets))
+        })
+        .ok_or(QuadSkinError::CrowdedLinks)?;
+
+    let project = |v: Vec3, direction: Vec3| v - direction * v.dot(direction);
+    let ports: Vec<_> = directions
+        .iter()
+        .enumerate()
+        .map(|(i, &direction)| {
+            let mut axis = project(basis, direction);
+            if axis.length_squared() < 1e-4 {
+                axis = directions
+                    .iter()
+                    .map(|&other| project(other, direction))
+                    .max_by(|a, b| a.length_squared().total_cmp(&b.length_squared()))
+                    .expect("fan has branches");
+            }
+            let center = origin.center + offsets[i] * direction;
+            add_ring(cage, center, radii[i], direction, axis.normalize())
+        })
+        .collect();
+    // Keep some volume at the wrist or heel rather than spanning only
+    // between distant limb collars. Limit each point to the inside of all
+    // collar planes so it cannot cap a limb opening.
+    let axis = ports[0].axis;
+    let normal = ports[0].normal;
+    let tangent = normal.cross(axis);
+    let support = [axis, -axis, normal, -normal, tangent, -tangent].map(|direction| {
+        let reach = ports
+            .iter()
+            .zip(&offsets)
+            .filter_map(|(port, offset)| {
+                let projection = direction.dot(port.normal);
+                (projection > 0.0).then(|| 0.85 * offset / projection)
+            })
+            .fold(origin.radius, f32::min);
+        direction * reach
+    });
+    join_ports(cage, &ports, origin.center, &support)?;
+    Ok(ports)
+}
+
+fn fit_fan_offsets(
+    directions: &[Vec3],
+    radii: &[f32],
+    limits: &[f32],
+    minimum: f32,
+    clearance: f32,
+) -> Option<Vec<f32>> {
+    let mut offsets: Vec<_> = limits.iter().map(|&limit| minimum.min(limit)).collect();
+    // Ring j must lie entirely behind ring i's plane:
+    // offset[i] >= cos(angle) * offset[j] + sin(angle) * radius[j] + clearance.
+    // Ignore the helpful negative term for obtuse angles so the relaxed
+    // constraints are monotone. Seed acute pairs with their closed-form
+    // lower bound so even close neighbors converge without many tiny steps.
+    let mut constraints = Vec::new();
+    for (i, &a) in directions.iter().enumerate() {
+        for (j, &b) in directions[..i].iter().enumerate() {
+            let cosine = a.dot(b).max(0.0);
+            let sine = a.cross(b).length();
+            if cosine >= 1.0 {
+                return None;
+            }
+            let need_i = sine * radii[j] + clearance;
+            let need_j = sine * radii[i] + clearance;
+            let denominator = 1.0 - cosine * cosine;
+            offsets[i] = offsets[i].max((need_i + cosine * need_j) / denominator);
+            offsets[j] = offsets[j].max((need_j + cosine * need_i) / denominator);
+            constraints.push((i, j, cosine, need_i, need_j));
+        }
+    }
+    for _ in 0..128 {
+        let mut moved = false;
+        for &(i, j, cosine, need_i, need_j) in &constraints {
+            let next_i = offsets[i].max(cosine * offsets[j] + need_i);
+            let next_j = offsets[j].max(cosine * offsets[i] + need_j);
+            moved |= next_i > offsets[i] || next_j > offsets[j];
+            offsets[i] = next_i;
+            offsets[j] = next_j;
+        }
+        if offsets.iter().zip(limits).any(|(&offset, &limit)| offset > limit) {
+            return None;
+        }
+        if !moved {
+            break;
+        }
+    }
+
+    Some(offsets)
 }
 
 fn add_ring(cage: &mut Cage, center: Vec3, radius: f32, direction: Vec3, axis: Vec3) -> Section {
@@ -325,16 +479,22 @@ fn bridge_rings(cage: &mut Cage, start: Ring, end: Ring) {
     }
 }
 
-/// The convex hull of the three collar rings gives a closed junction whose
+/// The convex hull of the collar rings gives a closed junction whose
 /// collar faces can be removed, leaving matching boundaries for the limbs.
-/// The hull is small and fixed-size, so enumerate its supporting planes.
-fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), QuadSkinError> {
-    let indices: Vec<_> = ports.iter().flat_map(|p| p.ring).collect();
-    let points: Vec<_> = indices.iter().map(|&i| cage.positions[i as usize] - origin).collect();
+/// The hull is small and bounded, so enumerate its supporting planes.
+fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3, support: &[Vec3]) -> Result<(), QuadSkinError> {
+    let mut indices: Vec<_> = ports.iter().flat_map(|p| p.ring.map(Some)).collect();
+    let mut points: Vec<_> = indices.iter().flatten().map(|&i| cage.positions[i as usize] - origin).collect();
+    points.extend_from_slice(support);
+    indices.resize(points.len(), None);
     let tolerance = points.iter().map(|p| p.length()).fold(0.0, f32::max) * 1e-5;
     for Section { ring, normal, .. } in ports {
         let offset = normal.dot(cage.positions[ring[0] as usize] - origin);
-        if points.iter().enumerate().any(|(i, p)| !ring.contains(&indices[i]) && p.dot(*normal) >= offset - tolerance) {
+        if points
+            .iter()
+            .enumerate()
+            .any(|(i, p)| !indices[i].is_some_and(|id| ring.contains(&id)) && p.dot(*normal) >= offset - tolerance)
+        {
             return Err(QuadSkinError::CrowdedLinks);
         }
     }
@@ -357,7 +517,7 @@ fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), Qu
                     distances.iter_mut().for_each(|d| *d = -*d);
                 }
                 let mut face: Vec<_> = (0..points.len()).filter(|&i| distances[i].abs() <= tolerance).collect();
-                if ports.iter().any(|port| face.iter().all(|&i| port.ring.contains(&indices[i])))
+                if ports.iter().any(|port| face.iter().all(|&i| indices[i].is_some_and(|id| port.ring.contains(&id))))
                     || !seen.insert(face.clone())
                 {
                     continue;
@@ -370,15 +530,26 @@ fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), Qu
                     radial.dot(v).atan2(radial.dot(u))
                 };
                 face.sort_by(|&i, &j| angle(i).total_cmp(&angle(j)));
+                // Interior support points do not belong to the cage.
+                let corners: Vec<_> = face
+                    .into_iter()
+                    .map(|i| {
+                        *indices[i].get_or_insert_with(|| {
+                            let id = cage.positions.len() as u32;
+                            cage.positions.push(origin + points[i]);
+                            id
+                        })
+                    })
+                    .collect();
                 // A center fan for larger facets avoids choosing a preferred
                 // diagonal in a mirror-symmetric junction.
-                if face.len() <= 4 {
-                    cage.faces.push(Face::new(face.into_iter().map(|i| indices[i]).collect()));
+                if corners.len() <= 4 {
+                    cage.faces.push(Face::new(corners));
                 } else {
                     let tip = cage.positions.len() as u32;
                     cage.positions.push(origin + center);
-                    for i in 0..face.len() {
-                        cage.faces.push(Face::new(vec![indices[face[i]], indices[face[(i + 1) % face.len()]], tip]));
+                    for i in 0..corners.len() {
+                        cage.faces.push(Face::new(vec![corners[i], corners[(i + 1) % corners.len()], tip]));
                     }
                 }
             }
@@ -658,12 +829,101 @@ mod tests {
         );
     }
 
+    fn add_digits(arm: &mut Armature, palm: usize, count: usize) {
+        let center = arm.spheres[palm].center;
+        for &(x, y, z, radius) in &[
+            (-0.77, 0.62, 0.12, 0.11),
+            (-0.39, 0.98, 0.0, 0.094),
+            (-0.10, 1.12, -0.025, 0.088),
+            (0.21, 1.02, 0.01, 0.086),
+            (0.49, 0.86, 0.055, 0.076),
+        ][..count]
+        {
+            let digit = arm.add_child(palm, center + Vec3::new(x, y, z), radius);
+            arm.add_child(digit, center + Vec3::new(x * 1.25, y + 0.48, z + 0.13), radius * 0.74);
+        }
+    }
+
+    #[test]
+    fn wrist_supports_three_to_five_direct_digits() {
+        for count in 3..=5 {
+            let mut arm = Armature::new(Vec3::new(0.0, -1.8, 0.0), 0.27, None);
+            let wrist = arm.add_child(0, Vec3::ZERO, 0.31);
+            add_digits(&mut arm, wrist, count);
+            let opts = QuadSkinOptions { resolution: 320, blend: 0.0, ..Default::default() };
+            let cage = quad_skin_armature(&arm, opts).unwrap_or_else(|error| panic!("{count} digits: {error}"));
+            assert_eq!(cage, quad_skin_armature(&arm, opts).unwrap());
+            assert!(cage.quad_count() > cage.triangle_count());
+            for subdivision in [1, 2] {
+                let mesh = quad_skin_mesh(&arm, QuadSkinOptions { subdivision, ..opts })
+                    .unwrap_or_else(|error| panic!("{count} digits at subdivision {subdivision}: {error}"));
+                assert!(crate::check_watertight(&mesh));
+                let smooth = oxy_mesh::polyedit::cage_from_mesh(&mesh);
+                assert_eq!(smooth.faces.len(), smooth.quad_count());
+            }
+            if count == 5 {
+                arm.add_child(wrist, Vec3::Z, 0.1);
+                assert_eq!(quad_skin_armature(&arm, opts), Err(QuadSkinError::UnsupportedBranching));
+            }
+        }
+    }
+
+    #[test]
+    fn short_finger_sockets_can_narrow_without_resizing_the_armature() {
+        let mut arm = Armature::new(Vec3::new(0.0, -1.6, 0.0), 0.28, None);
+        let wrist = arm.add_child(0, Vec3::ZERO, 0.31);
+        for (x, y) in [(-0.72, 0.70), (-0.305, 0.725), (0.265, 0.70)] {
+            let digit = arm.add_child(wrist, Vec3::new(x, y, 0.0), 0.16);
+            arm.add_child(digit, Vec3::new(x * 1.4, y + 0.50, 0.03), 0.12);
+        }
+        let before = arm.clone();
+        let opts = QuadSkinOptions { resolution: 320, blend: 0.0, subdivision: 1 };
+        let mesh = quad_skin_mesh(&arm, opts).unwrap();
+        assert!(crate::check_watertight(&mesh));
+        assert_eq!(arm, before);
+    }
+
+    #[test]
+    fn ankle_supports_five_toes() {
+        let mut arm = Armature::new(Vec3::Y * 1.7, 0.23, None);
+        let ankle = arm.add_child(0, Vec3::ZERO, 0.26);
+        for (x, y, z, radius) in [
+            (-0.41, -0.16, 0.79, 0.085),
+            (-0.20, -0.18, 0.87, 0.073),
+            (0.0, -0.18, 0.82, 0.067),
+            (0.19, -0.17, 0.73, 0.061),
+            (0.34, -0.14, 0.64, 0.055),
+        ] {
+            arm.add_child(ankle, Vec3::new(x, y, z), radius);
+        }
+        let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
+        assert_subdivides(&cage);
+    }
+
+    #[test]
+    fn mirrored_hands_stay_closed_and_reflected_after_subdivision() {
+        let mut arm = Armature::new(Vec3::new(0.0, -1.8, 0.0), 0.27, Some(0.0));
+        let wrist = arm.add_child(0, Vec3::X * 1.45, 0.31);
+        add_digits(&mut arm, wrist, 5);
+        let mesh = quad_skin_mesh(&arm, QuadSkinOptions { subdivision: 1, ..Default::default() }).unwrap();
+        assert!(crate::check_watertight(&mesh));
+        for &p in &mesh.positions {
+            let reflected = Vec3::new(-p.x, p.y, p.z);
+            assert!(mesh.positions.iter().any(|q| q.distance(reflected) < 2e-5), "missing reflection for {p:?}");
+        }
+    }
+
     #[test]
     fn crowded_and_unsupported_inputs_fail() {
-        let mut arm = fork(0.1, 0.4);
+        let arm = fork(0.1, 0.4);
         assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::CrowdedLinks));
-        arm.add_child(1, Vec3::Z * 2.0, 0.1);
-        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::UnsupportedBranching));
+
+        let mut crowded = Armature::new(Vec3::NEG_Y, 0.22, None);
+        let wrist = crowded.add_child(0, Vec3::ZERO, 0.25);
+        for x in [-0.01, 0.0, 0.01] {
+            crowded.add_child(wrist, Vec3::new(x, 0.6, 0.0), 0.1);
+        }
+        assert_eq!(quad_skin_armature(&crowded, QuadSkinOptions::default()), Err(QuadSkinError::CrowdedLinks));
 
         let mut arm = Armature::new(Vec3::ZERO, 0.3, None);
         arm.add_child(0, Vec3::ZERO, 0.3);

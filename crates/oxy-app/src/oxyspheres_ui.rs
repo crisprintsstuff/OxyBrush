@@ -102,7 +102,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         e.build_error = None;
                     }
                     ui.selectable_value(&mut e.quad_skin, true, "Quad base mesh")
-                        .on_hover_text("Experimental. Builds edge loops along chains and connected three-way junctions.");
+                        .on_hover_text("Experimental. Builds edge loops along chains and through joints with up to six links.");
                 });
                 ui.end_row();
                 if e.quad_skin {
@@ -117,7 +117,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                     ui.end_row();
                     ui.label("Blend").on_hover_text(
-                        "How soft three-way joins are. Lower keeps collars closer to the joint; higher spreads the transition. Endpoints and limb radii stay put",
+                        "How soft the joins are. Lower keeps collars closer to the joint; higher spreads the transition. Endpoints and limb radii stay put",
                     );
                     if ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.blend, 0.0..=1.0))).changed() {
                         e.build_error = None;
@@ -163,7 +163,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 accept |= ui
                     .button("Make mesh")
                     .on_hover_text(
-                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted; if that mesh was sculpted (or painted, masked, given levels, …), it adds a new piece and says why. The spheres stay. Quad skin supports up to three links at each joint.",
+                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted; if that mesh was sculpted (or painted, masked, given levels, …), it adds a new piece and says why. The spheres stay. Quad skin fits an incoming limb and up to five digits at the same joint. Close links need room for separate loops.",
                     )
                     .clicked();
                 done |= ui
