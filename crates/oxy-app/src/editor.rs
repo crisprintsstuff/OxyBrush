@@ -1097,6 +1097,7 @@ pub enum JobResult {
         mesh: Mesh,
         multires: Option<oxy_mesh::multires::Multires>,
         previous: Option<oxy_mesh::multires::Multires>,
+        strokes: Option<(u64, u64, crate::living::LevelStrokeRecords)>,
     },
     /// A lightened piece shown at its own level again (no undo step).
     Relevel {
@@ -7846,7 +7847,7 @@ impl Editor {
             return;
         }
         self.pointer_up();
-        if matches!(change, LevelChange::Add { .. } | LevelChange::Set(_)) && self.subdivision_would_bake_strokes() {
+        if matches!(change, LevelChange::Set(_)) && self.subdivision_would_bake_strokes() {
             return;
         }
         let background = result_triangles > self.level_job_triangles;
@@ -7855,6 +7856,19 @@ impl Editor {
             // No levels yet (or stale ones): start from the current mesh.
             _ => Some(self.new_level_stack(self.scene.active())),
         };
+        self.living_end_drag();
+        let piece = self.scene.active();
+        let records = if matches!(change, LevelChange::Add { .. }) {
+            let stack = fresh.as_ref().or(piece.multires.as_ref()).expect("subdivision stack");
+            let Some(records) = self.living.capture_for_subdivision(piece, stack) else {
+                self.subdivision_would_bake_strokes();
+                return;
+            };
+            records
+        } else {
+            Vec::new()
+        };
+        let strokes = (!records.is_empty()).then(|| (self.history.revision(), piece.mesh.edit_version(), records));
         let piece = self.scene.active_mut();
         let id = piece.id;
         let had_levels = piece.multires.is_some();
@@ -7911,7 +7925,7 @@ impl Editor {
                 };
                 mr.bind(&mesh);
                 let multires = (mr.level_count() > 1).then_some(mr);
-                Ok(JobResult::Levels { mesh, multires, previous })
+                Ok(JobResult::Levels { mesh, multires, previous, strokes })
             });
             if let Some(job) = &mut self.job {
                 job.holds_levels = true;
@@ -7930,7 +7944,13 @@ impl Editor {
         let (active, count) = (mr.active(), mr.level_count());
         let tris = piece.mesh.triangle_count();
         piece.multires = if count > 1 { Some(mr) } else { None };
-        self.history.record_topology(label, id, prev_mesh, prev_levels);
+        let doc = &mut self.documents[self.active_document];
+        doc.history.record_topology(label, id, prev_mesh, prev_levels);
+        if let Some((_, _, records)) = strokes
+            && let Some(entry) = doc.history.newest_id()
+        {
+            doc.living.added_subdivision(entry, doc.scene.active(), records);
+        }
         self.status = format!("{label}: level {} of {count}, {tris} triangles", active + 1);
     }
 
@@ -8066,7 +8086,7 @@ impl Editor {
             self.start_job(label, Vec::new(), move || {
                 let (out, mr) =
                     oxy_mesh::unsubdivide::rebuild_lower_level(&mesh).map_err(|e| e.message().to_string())?;
-                Ok(JobResult::Levels { mesh: out, multires: Some(mr), previous: None })
+                Ok(JobResult::Levels { mesh: out, multires: Some(mr), previous: None, strokes: None })
             });
             if let Some(job) = &mut self.job {
                 job.holds_levels = true;
@@ -8988,17 +9008,28 @@ impl Editor {
                 piece.multires = Some(multires);
                 format!("{} ({secs:.1} s)", job.label)
             }
-            Ok(JobResult::Levels { mesh, multires, previous }) => {
+            Ok(JobResult::Levels { mesh, multires, previous, strokes }) => {
                 let doc = &mut self.documents[doc_idx];
                 let Some(index) = doc.scene.index_of(job.target) else {
                     return format!("{}: the piece was deleted meanwhile", job.label);
                 };
                 let piece = &mut doc.scene.pieces[index];
+                if let Some((revision, edit_version, _)) = &strokes
+                    && (*revision != doc.history.revision() || *edit_version != piece.mesh.edit_version())
+                {
+                    piece.multires = previous;
+                    return "Subdivision cancelled because the project was edited while it was running".into();
+                }
                 let level = multires.as_ref().map(|m| (m.active(), m.level_count()));
                 let tris = mesh.triangle_count();
                 let prev_mesh = std::mem::replace(&mut piece.mesh, mesh);
                 piece.multires = multires;
                 doc.history.record_topology(&job.label, job.target, prev_mesh, previous);
+                if let Some((_, _, records)) = strokes
+                    && let Some(entry) = doc.history.newest_id()
+                {
+                    doc.living.added_subdivision(entry, &doc.scene.pieces[index], records);
+                }
                 match level {
                     Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
                     None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
@@ -18460,7 +18491,6 @@ mod tests {
         let revision = e.history.revision();
 
         e.step_level(-1);
-        e.add_level();
         e.subdivide(false);
         e.subdivide_background(false);
         e.living_sync();
@@ -18474,6 +18504,30 @@ mod tests {
         e.living_bake_active();
         e.step_level(-1);
         assert_eq!(e.multires_level(), Some((0, 2)));
+    }
+
+    #[test]
+    fn adding_a_level_preserves_a_positional_stroke_through_undo_and_redo() {
+        let mut e = with_living();
+        draw_curve(&mut e);
+        e.accept_curve();
+        let id = e.living.listed(e.scene.active().id)[0].id;
+        let original = e.living.listed(e.scene.active().id)[0].vertices.clone();
+        e.add_level();
+        e.living_sync();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        let projected = e.living.listed(e.scene.active().id)[0].vertices.clone();
+        assert_ne!(projected, original);
+        e.undo();
+        e.living_sync();
+        assert_eq!(e.living.listed(e.scene.active().id)[0].vertices, original);
+        e.redo();
+        e.living_sync();
+        assert_eq!(e.living.listed(e.scene.active().id)[0].vertices, projected);
+        e.living.selected = [id].into();
+        let before = e.scene.active().mesh.positions.clone();
+        e.living_set_strength(0.0);
+        assert_ne!(e.scene.active().mesh.positions, before);
     }
 
     /// The newest recipe, replayed on `base`, matches the piece now.

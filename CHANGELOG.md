@@ -11,7 +11,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Fixed
 
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
-- **Sculpt Layers.** Subdivision and level switching warn before baking editable strokes. Use Bake all in Strokes to bake explicitly before changing levels.
+- **Sculpt Layers.** Adding a subdivision level preserves position-only strokes and their layer controls, including across Undo and Redo. Level switching and subdivision that replaces the mesh still require an explicit bake.
 
 ## [4.1.2] - 2026-11-26
 

@@ -247,6 +247,29 @@ impl Snap {
     }
 }
 
+pub(crate) type LevelStrokeRecords = Vec<(u64, oxy_mesh::multires::LevelDisplacements)>;
+
+struct LevelStrokeEdit {
+    entry: u64,
+    records: Vec<(u64, StrokeProjection)>,
+}
+
+struct StrokeProjection {
+    topology: u64,
+    points: usize,
+    vertices: Vec<u32>,
+    deltas: Vec<Vec3>,
+}
+
+impl StrokeProjection {
+    fn swap(&mut self, stroke: &mut LivingStroke) {
+        std::mem::swap(&mut self.topology, &mut stroke.topology);
+        std::mem::swap(&mut self.points, &mut stroke.points);
+        std::mem::swap(&mut self.vertices, &mut stroke.vertices);
+        std::mem::swap(&mut self.deltas, &mut stroke.deltas);
+    }
+}
+
 /// A stroke's deltas and color changes.
 type Data = (Vec<Vec3>, Vec<Vec3>);
 
@@ -339,6 +362,7 @@ pub struct Living {
     pub strokes: Vec<LivingStroke>,
     pub groups: Vec<StrokeGroup>,
     edits: Vec<PanelEdit>,
+    level_edits: Vec<LevelStrokeEdit>,
     next_id: u64,
     next_group: u32,
     /// Selected rows of the panel, by stroke id.
@@ -499,11 +523,53 @@ impl Living {
         }
     }
 
+    pub(crate) fn capture_for_subdivision(
+        &self,
+        piece: &Piece,
+        stack: &oxy_mesh::multires::Multires,
+    ) -> Option<LevelStrokeRecords> {
+        self.strokes
+            .iter()
+            .filter(|s| s.piece == piece.id && s.listed())
+            .map(|s| {
+                if !s.colors.is_empty() || s.topology != piece.mesh.topology_version() {
+                    return None;
+                }
+                let deltas: Vec<_> = s.vertices.iter().copied().zip(s.deltas.iter().copied()).collect();
+                Some((s.id, stack.capture_displacements(&piece.mesh, &deltas)?))
+            })
+            .collect()
+    }
+
+    pub(crate) fn added_subdivision(&mut self, entry: u64, piece: &Piece, records: LevelStrokeRecords) {
+        let Some(stack) = &piece.multires else { return };
+        let mut previous = Vec::with_capacity(records.len());
+        for (id, native) in records {
+            let Some(stroke) = self.find_mut(id) else { continue };
+            let deltas = stack
+                .project_displacements(&piece.mesh, &native)
+                .expect("adding a level preserves the source subdivision hierarchy");
+            let (vertices, deltas) = deltas.into_iter().unzip();
+            let mut projection = StrokeProjection {
+                topology: piece.mesh.topology_version(),
+                points: piece.mesh.vertex_count(),
+                vertices,
+                deltas,
+            };
+            projection.swap(stroke);
+            previous.push((id, projection));
+        }
+        if !previous.is_empty() {
+            self.level_edits.push(LevelStrokeEdit { entry, records: previous });
+        }
+    }
+
     /// Forget every record (nothing on the surface changes).
     fn clear(&mut self) {
         self.strokes.clear();
         self.groups.clear();
         self.edits.clear();
+        self.level_edits.clear();
         self.selected.clear();
         self.solo = None;
         self.drag_from = None;
@@ -837,6 +903,13 @@ impl Editor {
         for s in living.strokes.iter_mut().filter(|s| s.entry == entry) {
             s.undone = undone;
         }
+        if let Some(edit) = living.level_edits.iter_mut().find(|edit| edit.entry == entry) {
+            for (id, projection) in &mut edit.records {
+                if let Some(stroke) = living.strokes.iter_mut().find(|s| s.id == *id) {
+                    projection.swap(stroke);
+                }
+            }
+        }
         let Some(e) = living.edits.iter().position(|e| e.entry == entry) else { return };
         let Living { edits, strokes, groups, placed_parts, .. } = living;
         let e = &edits[e];
@@ -904,6 +977,10 @@ impl Editor {
             !s.undone || history.can_redo_id(s.entry)
         });
         doc.living.edits.retain(|e| history.can_undo_id(e.entry) || history.can_redo_id(e.entry));
+        doc.living.level_edits.retain_mut(|edit| {
+            edit.records.retain(|(id, _)| doc.living.strokes.iter().any(|s| s.id == *id));
+            !edit.records.is_empty() && (history.can_undo_id(edit.entry) || history.can_redo_id(edit.entry))
+        });
         let strokes = &doc.living.strokes;
         doc.living.groups.retain(|g| strokes.iter().any(|s| s.group == Some(g.id)));
         doc.living.sync_parts();
@@ -1113,7 +1190,7 @@ impl Editor {
     }
 
     /// Put back the strengths a slider drag started from (no undo step).
-    fn living_end_drag(&mut self) {
+    pub(crate) fn living_end_drag(&mut self) {
         let Some(from) = self.living.drag_from.take() else { return };
         for (id, t) in from.strokes {
             if let Some(s) = self.living.find_mut(id) {
