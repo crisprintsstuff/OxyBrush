@@ -167,7 +167,10 @@ server-sent-events stream; use `--attach` for clients that require one.
 | `scene_state` | The document as JSON for programs: pieces with bounds and `topology_version` / `edit_version` / `face_version`, visible bounds, and the camera as data (eye, target, up, field of view, column-major view and projection matrices) |
 | `changes` | Events since a cursor (`piece_added`, `geometry_changed`, `camera_changed`, …). Call without `since` to get a cursor; `timeout_ms` (≤ 10000) waits for the next change |
 | `get_geometry` | Writes a piece's arrays (positions, normals, indices, and on request colors, mask, groups, hidden) to a binary `OXYG` file in a temporary folder and returns its path and layout |
-| `set_geometry` | Applies positions, vertex colors and/or mask from an `OXYG` file onto a piece (one undo step). Counts must match; optional `topology_version` refuses a stale write. Normals/indices/groups/hidden in the file are ignored |
+| `set_geometry` | Applies positions, vertex colors, or mask from an `OXYG` file. Counts must match. Optional `topology_version` checks for stale writes. |
+| `patch_geometry` | Writes absolute positions, colors, or mask at selected vertex indices. Pass `patch.indices` in the vertex order from `get_geometry`, the corresponding arrays, and `topology_version`. |
+| `get_viewport_state` | Returns physical pixel dimensions, camera, and a `view_token` for the current view. Single desktop viewport only. |
+| `set_viewport_image` / `clear_viewport_image` | Shows or removes a temporary image over that viewport. Set uses a local raw RGBA8 file and the matching `view_token`. |
 | `list_strokes` | The active piece's living strokes and stroke groups (ids, brush, strength, group), or `enabled: false` while Living strokes is off. Desktop app only |
 | `edit_strokes` | One Strokes window action by `op`: `set_strength`, `delete`, `solo`, `show_all`, `keep_unmasked`, `group`, `add_to_group`, `remove_from_group`, `group_strength`, `group_visible`, `rename_group`, `merge_groups`, `ungroup`, `delete_group`, `bake`, `mirror`, `split_by_side`, `sculpt_into`. Same JSON as the plugin API's [`stroke_command`](plugins/api-reference.md#living-strokes-read_scene-edit_strokes-4). Desktop app only |
 
@@ -200,10 +203,21 @@ own copy of the scene, such as an external renderer ([RFC 0007](rfcs/0007-plugin
 - In `oxybrush-cli mcp` only your own calls change the document, so
   `changes` never waits there.
 
-The Python SDK wraps these: `scene_state()`, `changes()`,
-`follow_changes()` (a generator of events), `get_geometry()` (which reads
-the file into `array` values) and `set_geometry(path=…)` /
-`set_geometry(arrays={…})` to write positions, colors or mask back.
+### Writing geometry and displaying a render
+
+Pass the same `undo_group` to consecutive `set_geometry` and
+`patch_geometry` calls on one piece to undo them together. Each geometry
+event from those tools includes an `origin`. Compare it with the
+`session_origin` in your `changes` reply to recognize your own writes.
+
+To match the desktop lighting rig, read `lighting` from `scene_state`.
+To show your render, send a local file containing exactly
+`width * height * 4` bytes of straight-alpha sRGB RGBA8 pixels, from the
+top row down. The limit is 64 MiB. Use the token from before rendering.
+The image clears when the view or scene changes. [RFC 0053](rfcs/0053-mcp-geometry-write.md)
+
+The [Python SDK](../python/README.md) wraps these tools, reads OXYG files
+into arrays, and provides `follow_changes()` to iterate over events.
 
 ## What the agent cannot do
 

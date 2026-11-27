@@ -1,4 +1,4 @@
-# Beta testing guide
+# Testing guide
 
 Thanks for helping test OxyBrush! Reports from different systems and workflows help us find regressions. Twenty minutes of trying it
 and one honest report is a real contribution.
@@ -20,7 +20,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-4.0.0-beta.18-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-4.1.3-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -41,7 +41,15 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
 10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
 
-## Beta.24.2 smoke test
+## 4.1.3 smoke test
+
+1. **OxySpheres.** Make a mirrored armature with two linked three-way junctions. Choose **Rotate** and drag on a limb. Its descendants and mirror should follow. Try the **Link** axis, undo the drag, then generate **Quad base mesh** and inspect the loops between junctions.
+2. **Retopology Contour.** Drag two cuts across a closed limb and look for a quad strip. Choose **New strip** before cutting a second limb.
+3. **Layers and subdivision.** Add sculpt and paint strokes at a fine level. Switch to a lower level and adjust the layer strength. Go back up and check that the detail follows. Save and reopen before checking the controls again.
+4. **Alphas and Stamp.** Load a JPEG, TIFF, WebP, or PSD composite into Alpha and rotate its preview. Try a directional alpha and Roll with changing pressure. Drag a large Scene Project stamp over a busy scene to check preview responsiveness.
+5. **Viewport and selection.** Sculpt and orbit in both panes of Split view. In Poly Edit, check Box, Lasso, and Ellipse outlines. With the brush shelf at the bottom, hold Ctrl and Ctrl+Shift to check the shape columns.
+
+## OxySpheres regeneration and earlier regressions
 
 1. **OxySpheres.** Make a mesh from a sphere with a thin branch. Edit the
    spheres and make the mesh again. The original generated piece should
@@ -66,7 +74,7 @@ Each of these is something we couldn't check without you:
 - **Performance:** the status bar shows the triangle count and milliseconds per frame. At what triangle count does sculpting stop feeling smooth on your machine?
 - **Crash recovery:** sculpt something, wait 2 minutes, then force-close OxyBrush (Task Manager / `kill`). Does it offer to recover your work on the next start?
 - **Installers:** do the Start-menu entry, uninstaller and `.oxb` double-click work on Windows? Does the Flatpak show up in your app menu with its icon? On macOS, does the app start after "Open Anyway", and does it run natively (Activity Monitor > Kind: "Apple" on Apple Silicon)?
-- **macOS is brand new:** any report from a real Mac (which model, which macOS version, does the GPU work, does a tablet work) is especially valuable.
+- **macOS hardware:** report the Mac model, macOS version, GPU, and tablet if you encounter startup or input problems.
 - **New in 4.0.0-beta.18:** mask part of a model, then Ctrl+click it: does the mask blur, and does Ctrl+Alt+click sharpen it? With nothing masked, does a click still paint a dab? Drag a mask box or lasso and press Alt just before letting go: is everything outside it masked? Use **Visibility > Hide masked**: are the masked faces hidden, and does Undo bring them back? In an empty scene, add a primitive or start from Empty: do the brush size slider and `[` `]` work, and does the Floor grid toggle show a grid at the origin? Arrange > Sort brushes A–Z should list the brush selector alphabetically.
 - **Poly Edit gizmo pivot and axes:** in Poly Edit, pick some faces, edges or points. Does the gizmo bar's **Pivot & axes** menu align to World, View or Normal? Alt+click a point, edge or face: does the pivot snap there? Alt+drag a handle: does only the gizmo move?
 - **From 4.0.0-beta.17:** start with **Empty** from the welcome window, add a primitive, save, reopen, and check that the scene stays empty after removing its last piece. Import several mesh files at once (also try dropping a batch onto the window): do the pieces arrive together, with their relative sizes intact, and does one Undo remove the batch? Turn on **Group the masked area** with Edge loop at mask border, then isolate the new group; do hidden faces stay out? On macOS, select an export format from File > Export type; on other platforms, does the chosen type appear first in the dialog, and does a typed extension still win? Also check that resizing the window no longer warps the UI, that default movement brush strength is 0.5 and Front faces only starts off, that a plain click on empty space clears a Poly Edit pick but an orbit drag doesn't, that crease brushes don't leave a ridge on the mirror plane, Kelvin Grab keeps its elasticity, and hidden faces don't join visible islands in Group by islands.

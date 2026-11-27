@@ -76,3 +76,36 @@ app.remesh(resolution=128)
 # Undo / Redo
 app.undo()
 ```
+
+## Geometry edits
+
+Use `get_geometry` to read a piece's vertex order and topology version.
+`patch_geometry` sets absolute positions, colors, or mask values at selected
+indices. Consecutive writes to the same piece with the same `undo_group` can
+be undone together. For example, paint two vertices on the active piece:
+
+```python
+mesh = app.get_geometry(fields=["positions"])
+target = {"id": mesh["piece"], "topology_version": mesh["topology_version"]}
+
+app.patch_geometry([0], colors=[[0.7, 0.2, 0.1]], undo_group="vertex-color", **target)
+app.patch_geometry([1], colors=[[0.2, 0.5, 0.8]], undo_group="vertex-color", **target)
+```
+
+Read the geometry again if a topology change invalidates the version. The same
+grouping option works with dense `set_geometry` writes. In a change listener,
+compare a geometry event's `origin` with the `session_origin` returned by
+`changes()` to recognize your session's writes.
+
+## Desktop render previews
+
+In a single desktop viewport, `get_viewport_state()` returns the physical
+pixel dimensions, camera, and `view_token`. Read `scene_state()["lighting"]`
+to match the app's lighting rig. Render to a local file containing raw
+straight-alpha sRGB RGBA8 pixels in row order. The file must be exactly
+`width * height * 4` bytes and at most 64 MiB. Pass the file to
+`set_viewport_image(path, view_token=state["view_token"])` using the state
+from before rendering. The preview clears when the view or scene changes.
+Use `clear_viewport_image()` to remove it manually.
+
+[Geometry write and viewport API details](../docs/rfcs/0053-mcp-geometry-write.md)

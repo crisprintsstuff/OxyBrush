@@ -138,7 +138,7 @@
         </div>
         <div class="flex items-center gap-2">
           <span class="font-display font-bold text-xl tracking-wide text-white">OxyBrush</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-slate-300 font-medium" data-latest-version>v4.0.0-beta.18</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-slate-300 font-medium" data-latest-version>v4.1.3</span>
         </div>
       </a>
 
@@ -160,7 +160,7 @@
       <div class="flex items-center gap-3">
         <a href="#downloads" class="px-5 py-2.5 rounded-full bg-gradient-to-r from-oxy-pink to-oxy-purple hover:opacity-90 text-white font-semibold text-xs transition-all flex items-center gap-1.5 shadow-lg">
           <i data-lucide="download" class="w-4 h-4"></i>
-          <span data-latest-version data-short>Get v4.0.0-beta.18</span>
+          <span data-latest-version data-short>Get v4.1.3</span>
         </a>
         <a href="https://discord.gg/Vfm7Km7xvG" target="_blank" rel="noopener noreferrer" class="p-2.5 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white transition-all group" title="Join the OxyBrush Discord" aria-label="OxyBrush community on Discord">
           <svg class="w-4 h-4 group-hover:scale-110 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path></svg>
@@ -207,7 +207,7 @@
         <div class="flex flex-wrap items-center justify-center gap-4 mb-16">
           <a href="#downloads" class="px-8 py-4 rounded-full bg-white hover:bg-slate-200 text-black font-semibold transition-all flex items-center gap-2 shadow-xl hover:shadow-2xl hover:-translate-y-1">
             <i data-lucide="download-cloud" class="w-5 h-5 text-oxy-pink"></i>
-            <span>Download <span data-latest-version>v4.0.0-beta.18</span></span>
+            <span>Download <span data-latest-version>v4.1.3</span></span>
           </a>
           <button type="button" onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" aria-label="Copy command: git clone https://github.com/crisprintsstuff/OxyBrush.git" class="px-6 py-4 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white font-mono text-xs transition-all flex items-center gap-3">
             <i data-lucide="terminal" class="w-4 h-4 text-oxy-blue"></i>
@@ -247,11 +247,11 @@
           <div>
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-oxy-pink/10 border border-oxy-pink/20 text-oxy-pink text-xs font-bold uppercase tracking-wider mb-4">
               <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
-              What's New in v4.0.0-beta.18
+              What's New in v4.1.3
             </div>
-            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Faster Mask Editing</h2>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Pose, Retopologize, and Refine</h2>
           </div>
-          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.18" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-oxy-blue hover:text-oxy-pink transition-colors flex items-center gap-1.5 self-start md:self-end">
+          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.3" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-oxy-blue hover:text-oxy-pink transition-colors flex items-center gap-1.5 self-start md:self-end">
             <span>View GitHub Release</span>
             <i data-lucide="arrow-up-right" class="w-4 h-4"></i>
           </a>
@@ -265,14 +265,14 @@
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-pink mb-6">
                 <i data-lucide="box" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Blur and Sharpen the Mask</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">Pose OxySpheres Branches</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                Ctrl+click on the model blurs the mask and Ctrl+Alt+click sharpens it. Dragging still paints or unmasks.
+                Rotate mirrored branches, twist along links, and make a quad base mesh from connected three-way junctions.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-pink font-medium relative z-10">
               <i data-lucide="check" class="w-4 h-4"></i>
-              <span>New in 4.0.0-beta.18</span>
+              <span>New in 4.1.3</span>
             </div>
           </div>
 
@@ -282,14 +282,14 @@
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-purple mb-6">
                 <i data-lucide="files" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Hide Masked Faces</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">Draw Contour Strips</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                Hide the masked faces from the Visibility menu, and press Alt before releasing a mask box or lasso to mask everything outside it.
+                Drag cuts across a limb to lay down successive rings and connect them with quads.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-purple font-medium relative z-10">
               <i data-lucide="check" class="w-4 h-4"></i>
-              <span>New in 4.0.0-beta.18</span>
+              <span>New in 4.1.3</span>
             </div>
           </div>
 
@@ -299,14 +299,14 @@
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-blue mb-6">
                 <i data-lucide="move-3d" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Sort Brushes A–Z</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">Keep Layers Editable</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                List the brush selector alphabetically from the Arrange menu. Brush size and the floor grid also work in an empty scene.
+                Switch or add subdivision levels while keeping sculpt and paint layers editable.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-blue font-medium relative z-10">
               <i data-lucide="check" class="w-4 h-4"></i>
-              <span>New in 4.0.0-beta.18</span>
+              <span>New in 4.1.3</span>
             </div>
           </div>
 
@@ -570,7 +570,7 @@
         
         <div class="text-center mb-16">
           <div class="text-sm font-bold text-white uppercase tracking-widest mb-3">Get Started</div>
-          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-4">Download OxyBrush <span data-latest-version>v4.0.0-beta.18</span></h2>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-4">Download OxyBrush <span data-latest-version>v4.1.3</span></h2>
           <p class="text-slate-400 text-lg max-w-xl mx-auto">
             Binary releases are pre-compiled and published on GitHub Releases with SHA-256 checksums.
           </p>
@@ -591,14 +591,14 @@
               <p class="text-sm text-slate-400 mb-8">Windows 10 / 11 with DirectX 12 or Vulkan support.</p>
               
               <div class="space-y-3">
-                <a data-asset="windows-setup" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.0.0-beta.18/OxyBrush-4.0.0-beta.18-windows-x86_64-setup.exe" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-blue hover:text-white hover:border-oxy-blue text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="windows-setup" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.1.3/OxyBrush-4.1.3-windows-x86_64-setup.exe" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-blue hover:text-white hover:border-oxy-blue text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="package" class="w-4 h-4 opacity-70"></i>
                     <span>Installer (.exe)</span>
                   </span>
                   <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="windows-portable" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.0.0-beta.18/OxyBrush-4.0.0-beta.18-windows-x86_64-portable.zip" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                <a data-asset="windows-portable" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.1.3/OxyBrush-4.1.3-windows-x86_64-portable.zip" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.zip)</span>
@@ -622,7 +622,7 @@
               <p class="text-sm text-slate-400 mb-8">macOS 11+ running Apple Silicon (M-series) &amp; Intel.</p>
               
               <div class="space-y-3">
-                <a data-asset="macos-dmg" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.0.0-beta.18/OxyBrush-4.0.0-beta.18-macos-universal.dmg" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-purple hover:text-white hover:border-oxy-purple text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="macos-dmg" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.1.3/OxyBrush-4.1.3-macos-universal.dmg" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-purple hover:text-white hover:border-oxy-purple text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="disc" class="w-4 h-4 opacity-70"></i>
                     <span>App Image (.dmg)</span>
@@ -646,14 +646,14 @@
               <p class="text-sm text-slate-400 mb-8">Modern desktop distributions via Flatpak or standalone.</p>
               
               <div class="space-y-3">
-                <a data-asset="linux-flatpak" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.0.0-beta.18/OxyBrush-4.0.0-beta.18-linux-x86_64.flatpak" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-pink hover:text-white hover:border-oxy-pink text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="linux-flatpak" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.1.3/OxyBrush-4.1.3-linux-x86_64.flatpak" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-pink hover:text-white hover:border-oxy-pink text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="box" class="w-4 h-4 opacity-70"></i>
                     <span>Flatpak Bundle</span>
                   </span>
                   <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="linux-tarball" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.0.0-beta.18/OxyBrush-4.0.0-beta.18-linux-x86_64.tar.gz" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                <a data-asset="linux-tarball" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v4.1.3/OxyBrush-4.1.3-linux-x86_64.tar.gz" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.tar.gz)</span>
@@ -693,13 +693,25 @@
 
         <div class="space-y-6">
           
+          <!-- v4.1.3 -->
+          <div class="rounded-3xl glass overflow-hidden border-oxy-pink/30">
+            <div class="px-8 py-5 border-b border-white/5 bg-white/5 flex items-center gap-4">
+              <span class="font-display font-bold text-white text-lg">4.1.3</span>
+              <span class="text-sm text-slate-400">2026-11-27</span>
+            </div>
+            <div class="p-8 text-sm text-slate-300 space-y-4 leading-relaxed">
+              <p>Pose OxySpheres branches with mirrored rotation and link twist. Draw connected quad rings with Retopology Contour and keep sculpt and paint layers editable across subdivision levels.</p>
+              <p>Import more alpha formats, preview alpha rotation, and use smoother Roll and Scene Project Stamp behavior. OxyRemesh also tests fitted charts with integer-aligned seams.</p>
+              <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.3" class="text-oxy-blue hover:text-oxy-pink transition-colors">Read the 4.1.3 release notes</a>
+            </div>
+          </div>
+
           <!-- v4.0.0-beta.18 -->
           <div class="rounded-3xl glass overflow-hidden border-oxy-pink/30">
             <div class="px-8 py-5 border-b border-white/5 bg-white/5 flex items-center justify-between">
               <div class="flex items-center gap-4">
                 <span class="font-display font-bold text-white text-lg">4.0.0-beta.18</span>
                 <span class="text-sm text-slate-400">2026-11-18</span>
-                <span class="px-3 py-1 rounded-full bg-oxy-pink text-white text-xs font-bold uppercase tracking-wide shadow-[0_0_10px_rgba(236,72,153,0.5)]">Latest</span>
               </div>
             </div>
             <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
@@ -1243,7 +1255,7 @@
   <script>
     // Everything below is progressive enhancement. With no JavaScript, or if
     // a CDN or the GitHub API is unreachable, the page still works: download
-    // links point straight at the v4.0.0-beta.18 files (update them on release),
+    // links point straight at the v4.1.3 files (update them on release),
     // and only the icons and the copy buttons are missing.
     if (window.lucide) lucide.createIcons();
 
@@ -1251,8 +1263,8 @@
     if (year) year.textContent = new Date().getFullYear();
 
     // Point the download links at the newest release, if GitHub answers in
-    // time. Every OxyBrush release is a pre-release, so /releases/latest
-    // returns 404; list releases and take the newest published one instead.
+    // time. The release list includes both stable releases and prereleases.
+    // Use the newest published release that has downloadable assets.
     (async function latestRelease() {
       const patterns = {
         'windows-setup': /-windows-x86_64-setup\.exe$/,

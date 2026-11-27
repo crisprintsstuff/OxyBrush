@@ -2,8 +2,8 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.24.5](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.5);
-the detailed engineering plan is in the [roadmap](ROADMAP.md).
+[4.1.3](releases/v4.1.3.md).
+The detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
 [Discord](https://discord.gg/Vfm7Km7xvG) or with **Help > Send feedback…**
@@ -14,7 +14,9 @@ in the app.
 > Every stroke stays editable, even after you've sculpted on top of it.
 
 **Status:** Living strokes are available in the Layers panel after you enable
-them in Preferences > General. The Recipe Box is also available. Save a group
+them in Preferences > General. Sculpt and paint layers keep their strength
+and visibility controls when you switch or add subdivision levels. You can
+also save a masked gizmo pose in a layer. The Recipe Box is available. Save a group
 of strokes as a recipe, then drag it onto another surface as a single copy
 or a mirrored pair. Placed recipes stay editable as stroke groups, and you
 can move them on the surface. The library changes when you explicitly save
@@ -71,11 +73,9 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **Smooth preview persistence and brush-on-cage feedback** beyond Topology's live Catmull–Clark preview ([RFC 0048](rfcs/0048-dynamic-smooth.md), #447).
 
 ### Models and topology
-- **Rebuild lower subdivision levels** for a dense model imported from
-  another app, so you can sculpt broad changes on it.
 - **Faster dynamic detail on big models** (it's smooth up to a few hundred
   thousand triangles today).
-- **Retopology:** quad strips and edge sliding.
+- **Retopology:** edge sliding. Contour quad strips are available in 4.1.3.
 - **Edge-preserving polish** for hard-surface work.
 
 ### Painting and materials
@@ -109,6 +109,11 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
 ## Recently shipped (for context)
+
+- **4.1.3:** OxySpheres branch rotation and connected quad junctions, Retopology Contour, repeatable lower subdivision level recovery, and sculpt and paint layers across levels. [Release notes](releases/v4.1.3.md)
+- **4.1.2:** Closed-surface extraction fixes for OxyRemesh. [Release notes](releases/v4.1.2.md)
+- **4.1.1:** Focus layout, mode-aware inspector, and OxyRemesh extraction fixes. [Release notes](releases/v4.1.1.md)
+- **4.1.0:** Split view, Scale cover Phase 2, Also paint, and OxySpheres Resolution and Blend. [Release notes](releases/v4.1.0.md)
 
 - **4.0.0-beta.24.5:** Paint Color Jitter, lit surface controls in Materials,
   and inline errors for rejected OxySpheres quad builds.

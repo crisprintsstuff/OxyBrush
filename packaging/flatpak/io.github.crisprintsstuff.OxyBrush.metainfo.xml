@@ -52,6 +52,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.1.3" date="2026-11-27" type="stable">
+      <description>
+        <p>Pose mirrored OxySpheres branches, connect three-way junctions in quad skins, and draw quad strips with Retopology Contour.</p>
+        <p>Keep sculpt and paint layers editable across subdivision levels, recover lower quad levels repeatedly, and import JPEG, TIFF, WebP, and PSD composite brush alphas.</p>
+        <p>Improves Scene Project stamps, split view, imported quad smoothing, pen pressure, and startup on Intel UHD Graphics 600.</p>
+      </description>
+    </release>
     <release version="4.1.2" date="2026-11-26" type="stable">
       <description>
         <p>OxyRemesh no longer replaces closed sculpts with Swiss-cheese meshes: dual cleanup, hole fill, and a closed voxel remesh fallback when the field shell cannot enclose.</p>

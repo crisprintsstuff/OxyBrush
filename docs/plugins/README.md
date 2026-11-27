@@ -29,7 +29,8 @@ token, closed when the script ends. Running one doesn't turn on
 Settings > Local AI agent; the status bar shows "Plugin '*name*' running",
 and its edits are undo steps labelled `Plugin: <name>: …` rather than
 `Agent: …`. The script finds the connection in `OXYBRUSH_MCP_ENDPOINT` and
-`OXYBRUSH_MCP_TOKEN` (the Python SDK's `oxybrush.attach()` reads them).
+`OXYBRUSH_MCP_TOKEN` (`oxybrush.attach()` reads them). The SDK documents sparse geometry edits,
+grouped Undo, and temporary desktop render previews. [Python SDK guide](../../python/README.md)
 
 ## Using plugins
 
