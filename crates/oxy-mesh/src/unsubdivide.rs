@@ -9,8 +9,8 @@
 //! detail stores the difference from a fresh Catmull–Clark of that coarse
 //! mesh (so sculpted high detail is kept).
 
+use crate::Mesh;
 use crate::multires::Multires;
-use crate::{Mesh, Vec3};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Coarse faces, fine V-vertices, fine E-vertices keyed by fine V endpoints,
@@ -23,8 +23,8 @@ type IntermediateSplit = (Vec<[u32; 4]>, Vec<u32>, Vec<u32>);
 /// Why a mesh cannot have a lower Catmull–Clark level rebuilt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RebuildError {
-    /// The piece already has subdivision levels.
-    HasLevels,
+    /// The existing levels are triangle subdivision.
+    NotCatmullClark,
     /// Not every face is a quad (or a recorded triangle pair).
     NotAllQuads,
     /// A boundary or non-manifold edge/vertex; the first version only
@@ -33,164 +33,32 @@ pub enum RebuildError {
     /// The connectivity is not exactly one Catmull–Clark step of a
     /// coarser mesh (ambiguous or missing).
     NoSubdivision,
-    /// Vertex colours or UVs that the first version does not carry.
+    /// UV seams or explicit creases cannot be recovered.
     UnsupportedAttributes,
+    /// Face attributes differ across a quad whose triangulation would change.
+    SplitFaceAttributes,
 }
 
 impl RebuildError {
     pub fn message(self) -> &'static str {
         match self {
-            Self::HasLevels => "This piece already has subdivision levels",
+            Self::NotCatmullClark => "Rebuild lower level needs Catmull–Clark subdivision levels",
             Self::NotAllQuads => "Rebuild lower level needs an all-quad mesh",
             Self::NotClosedManifold => {
                 "Rebuild lower level needs a closed manifold mesh (no holes or non-manifold edges)"
             }
             Self::NoSubdivision => "This mesh's connectivity is not a Catmull–Clark subdivision of a coarser mesh",
-            Self::UnsupportedAttributes => {
-                "Rebuild lower level cannot keep UVs or vertex colour yet; clear them or Keep this level only first"
+            Self::UnsupportedAttributes => "Rebuild lower level cannot preserve UVs or crease weights",
+            Self::SplitFaceAttributes => {
+                "Rebuild lower level would change a quad diagonal across a face group or visibility boundary"
             }
         }
     }
 }
 
-/// One Catmull–Clark level recovered under `mesh`: a two-level stack with
-/// the input as the active high level.
-///
-/// PRECONDITION: `mesh` has no multires stack yet (the caller checks).
+/// Recover one level beneath a plain mesh, keeping the input surface active.
 pub fn rebuild_lower_level(mesh: &Mesh) -> Result<(Mesh, Multires), RebuildError> {
-    if !mesh.uvs().is_empty() || mesh.is_painted() {
-        return Err(RebuildError::UnsupportedAttributes);
-    }
-    let quads = mesh_quads(mesh)?;
-    let n = mesh.vertex_count();
-    let (coarse_faces, v_of_coarse, e_of_fine, f_of_fine) = recover_cc(&quads, n)?;
-    let coarse_n = v_of_coarse.len();
-    let mut coarse_pos = vec![Vec3::ZERO; coarse_n];
-    for (i, &v) in v_of_coarse.iter().enumerate() {
-        coarse_pos[i] = mesh.positions[v as usize];
-    }
-    let coarse_tris = triangulate_quads(&coarse_faces);
-    let coarse = Mesh::new(coarse_pos, coarse_tris);
-    // Mesh::from_data reorders vertices; map original coarse indices → mesh indices.
-    let src = coarse.source_vertices();
-    let mut mesh_of = vec![0u32; src.len()];
-    for (v, &s) in src.iter().enumerate() {
-        mesh_of[s as usize] = v as u32;
-    }
-    let diags: HashSet<[u32; 2]> = coarse_faces
-        .iter()
-        .map(|q| {
-            let a = mesh_of[q[0] as usize];
-            let b = mesh_of[q[2] as usize];
-            [a.min(b), a.max(b)]
-        })
-        .collect();
-    coarse.set_quad_diagonals(diags);
-    // Mark as recorded polygons so Catmull–Clark and later rebuilds keep quads.
-    coarse.set_ngon_edges(HashSet::new());
-
-    let mut mr = Multires::new_catmull_clark(&coarse, None);
-    let prepared = mr.prepare(&coarse);
-    let smooth = mr.add_level_prepared_with(prepared, true);
-    if smooth.positions.len() != n {
-        return Err(RebuildError::NoSubdivision);
-    }
-    let ordered = remap_fine_into_level_order(mesh, &mr, &v_of_coarse, &e_of_fine, &f_of_fine)?;
-    mr.install_active_positions(ordered);
-    let data = mr.active_mesh_data();
-    let out = Mesh::from_data(data);
-    mr.bind(&out);
-    out.set_ngon_edges(HashSet::new());
-    Ok((out, mr))
-}
-
-/// Place fine-mesh positions into Multires level-1 order (V, then E, then F).
-fn remap_fine_into_level_order(
-    mesh: &Mesh,
-    mr: &Multires,
-    v_of_coarse: &[u32],
-    e_of_fine: &HashMap<[u32; 2], u32>,
-    f_of_fine: &[u32],
-) -> Result<Vec<Vec3>, RebuildError> {
-    let (n_prev, edges) = mr.cc_edge_endpoints(1).ok_or(RebuildError::NoSubdivision)?;
-    let n = mesh.vertex_count();
-    if n_prev != v_of_coarse.len() || n_prev + edges.len() + f_of_fine.len() != n {
-        return Err(RebuildError::NoSubdivision);
-    }
-    // Multires base vertices may be in a different order than `v_of_coarse`
-    // (Mesh::from_data reorders). Match by position.
-    let base = mr.base_positions();
-    let mut fine_of_base = vec![u32::MAX; n_prev];
-    let mut used = vec![false; v_of_coarse.len()];
-    for (bi, &bp) in base.iter().enumerate() {
-        let mut best = None;
-        for (ci, &fv) in v_of_coarse.iter().enumerate() {
-            if used[ci] {
-                continue;
-            }
-            let d = mesh.positions[fv as usize].distance_squared(bp);
-            if best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((ci, d));
-            }
-        }
-        let Some((ci, d)) = best else {
-            return Err(RebuildError::NoSubdivision);
-        };
-        if d > 1e-10 {
-            return Err(RebuildError::NoSubdivision);
-        }
-        used[ci] = true;
-        fine_of_base[bi] = v_of_coarse[ci];
-    }
-
-    let mut ordered = vec![Vec3::ZERO; n];
-    for (bi, &fv) in fine_of_base.iter().enumerate() {
-        ordered[bi] = mesh.positions[fv as usize];
-    }
-    for (e_idx, &(a, b)) in edges.iter().enumerate() {
-        let fa = fine_of_base[a as usize];
-        let fb = fine_of_base[b as usize];
-        let Some(&fe) = e_of_fine.get(&edge_key(fa, fb)) else {
-            return Err(RebuildError::NoSubdivision);
-        };
-        ordered[n_prev + e_idx] = mesh.positions[fe as usize];
-    }
-    // Face points: Multires face order may differ from recovery order. Match
-    // each Multires face by the centroid of its coarse corners.
-    let polys = mr.base_polygons().ok_or(RebuildError::NoSubdivision)?;
-    let face_base = n_prev + edges.len();
-    if polys.offsets.len() != f_of_fine.len() + 1 {
-        return Err(RebuildError::NoSubdivision);
-    }
-    let mut f_used = vec![false; f_of_fine.len()];
-    for f in 0..f_of_fine.len() {
-        let start = polys.offsets[f] as usize;
-        let end = polys.offsets[f + 1] as usize;
-        if end - start != 4 {
-            return Err(RebuildError::NoSubdivision);
-        }
-        let mut c = Vec3::ZERO;
-        for &vi in &polys.corners[start..end] {
-            c += base[vi as usize];
-        }
-        c /= 4.0;
-        let mut best = None;
-        for (fi, &ff) in f_of_fine.iter().enumerate() {
-            if f_used[fi] {
-                continue;
-            }
-            let d = mesh.positions[ff as usize].distance_squared(c);
-            if best.is_none_or(|(_, bd)| d < bd) {
-                best = Some((fi, d));
-            }
-        }
-        let Some((fi, _)) = best else {
-            return Err(RebuildError::NoSubdivision);
-        };
-        f_used[fi] = true;
-        ordered[face_base + f] = mesh.positions[f_of_fine[fi] as usize];
-    }
-    Ok(ordered)
+    crate::multires::rebuild::from_mesh(mesh)
 }
 
 /// Edge key for undirected fine edges (fine vertex indices).
@@ -198,10 +66,12 @@ fn edge_key(a: u32, b: u32) -> [u32; 2] {
     [a.min(b), a.max(b)]
 }
 
+pub(crate) type QuadTriangles = ([u32; 4], [usize; 2]);
+
 /// Quads of `mesh`. Prefers recorded diagonals (import POLY, cage, or
 /// Multires::bind); geometric pairing alone often fails on non-planar
 /// Catmull–Clark quads (RFC 0036).
-fn mesh_quads(mesh: &Mesh) -> Result<Vec<[u32; 4]>, RebuildError> {
+pub(crate) fn mesh_quads(mesh: &Mesh) -> Result<Vec<QuadTriangles>, RebuildError> {
     let (q, t) = mesh.quad_and_triangle_counts();
     if t != 0 || q == 0 {
         return Err(RebuildError::NotAllQuads);
@@ -221,10 +91,12 @@ fn mesh_quads(mesh: &Mesh) -> Result<Vec<[u32; 4]>, RebuildError> {
             if !diags.contains(&k) {
                 continue;
             }
-            for (tj, other) in mesh.triangles.iter().enumerate() {
+            for &tj in mesh.vertex_triangles(a) {
+                let tj = tj as usize;
                 if tj == ti || used[tj] {
                     continue;
                 }
+                let other = mesh.triangles[tj];
                 let shares = (0..3)
                     .filter(|&j| {
                         let x = other[j];
@@ -248,10 +120,10 @@ fn mesh_quads(mesh: &Mesh) -> Result<Vec<[u32; 4]>, RebuildError> {
         used[tj] = true;
         let c = tri[(diag_i + 2) % 3];
         let other = mesh.triangles[tj];
-        let d = other.iter().copied().find(|&v| v != tri[diag_i] && v != tri[(diag_i + 1) % 3]).unwrap();
         let a = tri[diag_i];
         let b = tri[(diag_i + 1) % 3];
-        quads.push([a, d, b, c]);
+        let d = other.into_iter().find(|&v| v != a && v != b).ok_or(RebuildError::NotAllQuads)?;
+        quads.push(([a, d, b, c], [ti, tj]));
     }
     if quads.len() != q {
         return Err(RebuildError::NotAllQuads);
@@ -259,7 +131,7 @@ fn mesh_quads(mesh: &Mesh) -> Result<Vec<[u32; 4]>, RebuildError> {
     Ok(quads)
 }
 
-fn triangulate_quads(quads: &[[u32; 4]]) -> Vec<[u32; 3]> {
+pub(crate) fn triangulate_quads(quads: &[[u32; 4]]) -> Vec<[u32; 3]> {
     let mut tris = Vec::with_capacity(quads.len() * 2);
     for q in quads {
         tris.push([q[0], q[1], q[2]]);
@@ -273,7 +145,7 @@ fn triangulate_quads(quads: &[[u32; 4]]) -> Vec<[u32; 3]> {
 /// RETURNS: coarse faces (coarse vertex indices), fine vertex of each coarse
 /// vertex, fine E-vertex keyed by its two fine V endpoints, and fine F-vertex
 /// per coarse face (same order as `coarse_faces`).
-fn recover_cc(quads: &[[u32; 4]], n: usize) -> Result<RecoveredCc, RebuildError> {
+pub(crate) fn recover_cc(quads: &[[u32; 4]], n: usize) -> Result<RecoveredCc, RebuildError> {
     let (color, neighbors) = bipartite_color(quads, n)?;
     // Try each colour as the intermediate (V∪F); the other is E.
     for intermediate_color in [0u8, 1] {
@@ -399,7 +271,7 @@ fn order_ring(v: u32, quads: &[[u32; 4]], incident: &[usize]) -> Result<Vec<u32>
             return Err(RebuildError::NotClosedManifold);
         }
     }
-    let start = *next_along.keys().next().ok_or(RebuildError::NotClosedManifold)?;
+    let start = *next_along.keys().min().ok_or(RebuildError::NotClosedManifold)?;
     let mut ring = vec![start];
     let mut at = next_along[&start];
     while at != start {
@@ -502,8 +374,9 @@ fn split_intermediate(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::Vec3;
     use crate::multires::Scheme;
     use crate::primitives;
     use crate::retopo::{Cage, Face};
@@ -533,7 +406,7 @@ mod tests {
     }
 
     /// Dense CC level with recorded quads (as an import with POLY would have).
-    fn dense_cc_cube() -> Mesh {
+    pub(crate) fn dense_cc_cube() -> Mesh {
         let base = cube_mesh();
         let mut mr = Multires::new_catmull_clark(&base, None);
         let d = mr.add_level(&base);
