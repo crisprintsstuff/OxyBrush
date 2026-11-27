@@ -644,6 +644,8 @@ pub struct SavedStroke {
     /// `oxy_sculpt::StrokeRecipe` (RFC 0025), kept opaque here. Empty when
     /// the stroke has none.
     pub recipe: Vec<u8>,
+    /// Native subdivision-order position deltas, independent of the active mesh order.
+    pub native: Option<oxy_mesh::multires::LevelDisplacements>,
 }
 
 impl SavedStrokes {
