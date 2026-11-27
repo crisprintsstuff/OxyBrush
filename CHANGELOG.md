@@ -4,10 +4,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.1.4] - 2026-11-27
+
 ### Added
 
-- **OxySpheres quad hands and feet.** An incoming limb and up to five fingers or toes can attach directly to one joint. Quad base mesh fits a separate loop around each link when the branches have room.
-- **Import inspection.** Imported mesh pieces are checked for open or non-manifold edges, inconsistent winding, and duplicate or degenerate faces. Use **Inspect import** in the status bar to see findings by piece. **Repair faces** corrects common face defects. **Close holes** fills suitable boundaries as a separate undoable action.
+- **OxySpheres quad hands and feet.** An incoming limb and up to five fingers or toes can attach directly to one joint. Quad base mesh fits a separate loop around each link when the branches have room. [#635](https://github.com/crisprintsstuff/OxyBrush/pull/635)
+- **Import inspection.** Imported mesh pieces are checked for open or non-manifold edges, inconsistent winding, and duplicate or degenerate faces. Use **Inspect import** in the status bar to see findings by piece. **Repair faces** corrects common face defects. **Close holes** fills suitable boundaries as a separate undoable action. [#637](https://github.com/crisprintsstuff/OxyBrush/pull/637)
+
+### Prototype
+
+- **Sculpt Variants.** The standalone browser prototype lets you sculpt two versions, paint a mix from them, and export the result as an OBJ. [RFC 0056](docs/rfcs/0056-sculpt-variants.md) · [#631](https://github.com/crisprintsstuff/OxyBrush/pull/631)
 
 ## [4.1.3] - 2026-11-27
 
@@ -1321,7 +1327,9 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.5...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.4...HEAD
+[4.1.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.3...v4.1.4
+[4.1.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.2...v4.1.3
 [4.0.0-beta.24.5]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.4...v4.0.0-beta.24.5
 [4.0.0-beta.24.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...v4.0.0-beta.24.4
 [4.0.0-beta.24.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...v4.0.0-beta.24.3
