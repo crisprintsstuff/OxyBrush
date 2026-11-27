@@ -280,7 +280,11 @@ impl Editor {
             let moved = pose::apply(&mut piece.mesh, &original, &weights, pivot, &t, &mirror);
             piece.mesh.update_after_move(&moved);
             piece.mesh.tighten_bounds();
+            let revision = self.history.revision();
             self.history.commit();
+            if self.history.revision() != revision {
+                self.living_record_transform(self.scene.active().id);
+            }
         }
         // A pivot you placed travels with the geometry.
         if let Some(p) = self.custom_gizmo_pivot.as_mut() {

@@ -3472,7 +3472,8 @@ impl Editor {
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(kind),
             smooth_paint: kind == BrushKind::Paint && self.brush_roles().shift,
-            also_paint: kind.supports_also_paint() && self.brush_also_paints(kind),
+            also_paint: self.brush_also_paints(kind),
+            rgb_strength: self.brush_rgb_override(kind).filter(|_| self.brush_also_paints(kind)),
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(kind),
             spray: self.spray,
@@ -3584,6 +3585,7 @@ impl Editor {
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(k),
             also_paint: self.brush_also_paints(k),
+            rgb_strength: self.brush_rgb_override(k),
             paint_jitter: self.paint_jitter(k),
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(k),
@@ -4454,6 +4456,7 @@ impl Editor {
                     let before = self.history.revision();
                     self.history.commit();
                     if self.history.revision() != before {
+                        self.living_record_transform(self.scene.active().id);
                         self.gizmo_session_record(g.pivot, &g.current);
                     }
                 }
@@ -13152,7 +13155,7 @@ mod tests {
 
     #[test]
     fn the_gizmo_moves_picked_pieces_together_in_one_undo_step() {
-        let mut e = editor();
+        let mut e = with_living();
         e.duplicate_active(None);
         e.scene.set_active(0);
         // Move the copy aside, so the two have a middle between them.
@@ -13175,6 +13178,9 @@ mod tests {
         e.pointer_moved(end + Vec2::new(40.0, 0.0));
         e.pointer_up();
         for (k, p) in e.scene.pieces.iter().enumerate() {
+            let records = e.living.listed(p.id);
+            assert_eq!(records.len(), 1, "piece {k} has its own transform stroke");
+            assert_eq!(records[0].label(), "Transform");
             let d = p.mesh.positions[0] - before[k][0];
             assert!(d.x > 0.01 && d.y.abs() < 1e-4 && d.z.abs() < 1e-4, "piece {k} moved along X: {d}");
         }
@@ -13182,6 +13188,7 @@ mod tests {
         e.undo();
         for (k, p) in e.scene.pieces.iter().enumerate() {
             assert_eq!(p.mesh.positions, before[k], "piece {k}");
+            assert!(e.living.listed(p.id).is_empty());
         }
         // Escape mid-drag puts them back too, with nothing to undo.
         e.redo();
@@ -18986,6 +18993,41 @@ mod tests {
     }
 
     #[test]
+    fn masked_gizmo_pose_layer_fades_and_survives_a_project_round_trip() {
+        let mut e = with_living();
+        let piece = e.scene.active_mut();
+        for (&p, mask) in piece.mesh.positions.iter().zip(&mut piece.mesh.mask) {
+            *mask = if p.y < 0.0 { 1.0 } else { 0.0 };
+        }
+        let before = piece.mesh.positions.clone();
+        let pid = piece.id;
+        e.living_new_layer();
+        let rotation = glam::Mat3::from_rotation_z(0.35);
+        assert!(e.apply_gizmo_transform("Rotate", pose::Transform { linear: rotation, translate: Vec3::ZERO }));
+        let full = e.scene.active().mesh.positions.clone();
+        assert_ne!(before, full);
+        assert!(before.iter().zip(&full).filter(|(p, _)| p.y < 0.0).all(|(a, b)| a == b));
+        let record = e.living.listed(pid)[0];
+        let group = record.group.unwrap();
+        assert_eq!(record.label(), "Transform");
+        e.living_set_group_strength(group, 0.0);
+        assert!(e.scene.active().mesh.positions.iter().zip(&before).all(|(a, b)| a.distance(*b) < 1e-6));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, full);
+        e.redo();
+        let bytes = format::encode(&e.scene_data());
+        let mut loaded = with_living();
+        loaded.replace_document(Scene::from_data(format::decode(&bytes).unwrap()).unwrap(), None);
+        let record = loaded.living.listed(loaded.scene.active().id)[0];
+        assert_eq!(record.label(), "Transform");
+        let group = record.group.unwrap();
+        loaded.living_set_group_strength(group, 1.0);
+        let mesh = &loaded.scene.active().mesh;
+        assert_eq!(mesh.vertex_count(), full.len());
+        assert!(mesh.positions.iter().zip(mesh.source_vertices()).all(|(p, &v)| p.distance(full[v as usize]) < 1e-6));
+    }
+
+    #[test]
     fn dynamic_detail_curve_move_and_the_gizmo_are_not_recipes() {
         // The mesh is rebuilt: no living stroke, so no recipe.
         let mut e = dyntopo_editor();
@@ -19036,7 +19078,10 @@ mod tests {
         let end = layout.axes[0].expect("X handle");
         drag(&mut e, end, end + (end - layout.center));
         assert!(e.history.can_undo());
-        assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
+        let strokes = e.living.listed(e.scene.active().id);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].label(), "Transform");
+        assert!(strokes[0].recipe.is_none(), "a gizmo move has no brush recipe");
     }
 
     #[test]

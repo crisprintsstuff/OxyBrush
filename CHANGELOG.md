@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Also paint RGB Strength** ([#585](https://github.com/crisprintsstuff/OxyBrush/issues/585)). Set color opacity independently of sculpt strength. The value is kept per brush and travels with presets and stroke recipes.
+- **Gizmo pose layers** ([#600](https://github.com/crisprintsstuff/OxyBrush/issues/600)). Move, rotate, or scale unmasked geometry with Living strokes on to record a transform. Use Sculpt into to put it directly into a layer and fade between the neutral pose and the transform.
+
 ### Changed
 
 - **OxyRemesh.** Open surfaces can use isoline extraction from fitted orientation-field charts when the charts are unfolded and cover enough of the surface.

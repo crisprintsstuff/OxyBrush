@@ -483,6 +483,19 @@ impl History {
         }
     }
 
+    /// The mesh saved by the newest entry, including for a compound
+    /// transform. Callers check that its vertex order still matches.
+    pub fn newest_mesh_before(&self, piece: u64) -> Option<&Mesh> {
+        fn before(change: &Change, piece: u64) -> Option<&Mesh> {
+            match change {
+                Change::Topology { piece: id, mesh, .. } if *id == piece => Some(mesh),
+                Change::Compound(changes) => changes.iter().find_map(|change| before(change, piece)),
+                _ => None,
+            }
+        }
+        before(&self.undo.back()?.change, piece)
+    }
+
     /// Changes whenever the document changes; useful for "unsaved" tracking.
     pub fn revision(&self) -> u64 {
         self.revision

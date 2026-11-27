@@ -83,7 +83,7 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
 /// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
 /// 7 smooth paint. 8 alpha tile / roll / rotate jitter (+ seed).
-const VERSION: u8 = 9;
+const VERSION: u8 = 10;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -133,13 +133,14 @@ impl StrokeRecipe {
     /// The recipe as bytes, for saving.
     ///
     /// ```text
-    /// "OXSR"  version:u8 (1 through 5)
+    /// "OXSR"  version:u8 (1 through 10)
     /// brush:text  falloff:text  shape:text          keys as in brush presets
     /// radius strength focal_shift spacing auto_smooth gravity spray
     ///   noise_scale crease_pinch : f32 each
     /// flags:u8      1 pressure_strength, 2 pressure_radius, 4 front_faces_only,
     ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5), 128 smooth paint (version 7)
     /// [version 9+: also_paint:u8]
+    /// [version 10+: rgb_strength:f32]
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
@@ -156,8 +157,10 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let version = if self.settings.also_paint {
+        let version = if self.settings.also_paint && self.settings.rgb_strength.is_some() {
             VERSION
+        } else if self.settings.also_paint {
+            9
         } else if self.rotate_jitter_seed != 0 || self.alpha.as_ref().is_some_and(Self::alpha_needs_v8) {
             8
         } else if self.settings.smooth_paint {
@@ -206,6 +209,9 @@ impl StrokeRecipe {
         );
         if version >= 9 {
             b.push(u8::from(s.also_paint));
+        }
+        if version >= 10 {
+            put_f32(&mut b, s.rgb_strength.unwrap_or(s.strength));
         }
         let y = &self.symmetry;
         b.push(u8::from(y.x) | u8::from(y.y) << 1 | u8::from(y.z) << 2);
@@ -311,6 +317,7 @@ impl StrokeRecipe {
         }
         let flags = r.u8()?;
         let also_paint = version >= 9 && r.u8()? != 0;
+        let rgb_strength = if version >= 10 { Some(r.f32()?.clamp(0.0, 1.0)) } else { None };
         let settings = BrushSettings {
             kind,
             radius,
@@ -324,6 +331,7 @@ impl StrokeRecipe {
             accumulate: version < 5 || flags & 64 == 0,
             smooth_paint: version >= 7 && flags & 128 != 0,
             also_paint,
+            rgb_strength,
             auto_smooth,
             gravity,
             spray,

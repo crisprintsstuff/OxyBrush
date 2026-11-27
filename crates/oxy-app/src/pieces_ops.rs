@@ -312,7 +312,21 @@ impl Editor {
             });
         }
         let n = steps.len();
+        let layer_pieces: Vec<_> = if self.living.enabled {
+            steps
+                .iter()
+                .filter_map(|step| match step {
+                    Step::Topology { piece, .. } => Some(*piece),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         self.history.record_compound(format!("{} {n} pieces", g.mode.label()), steps);
+        for piece in layer_pieces {
+            self.living_record_transform(piece);
+        }
         self.status = format!("{} {n} pieces (one undo step)", g.mode.label());
     }
 

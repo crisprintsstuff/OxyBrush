@@ -142,9 +142,13 @@ geometry in `STLV`, native color in `STCL`, and unclamped active color in
 `MRPC`. The visible colors and active stroke data remain in `VCOL` and
 `STRK`.
 
-Whole-piece edits (the Deform window, the transform gizmo, Fit to standard
-size) are recorded as strokes too, named after the tool, so they can be
-faded like any stroke.
+Gizmo moves, rotations and scales record vertex displacements when
+Living strokes is on. They appear as **Transform** in the Strokes list
+and can go directly into the **Sculpt into** layer. A drag across
+selected pieces records one transform per affected piece with a shared
+undo step. Transform records fade like other position-only strokes,
+including across subdivision levels. Operations that replace topology
+follow the baking rules above.
 
 ### Undo and the panel
 
