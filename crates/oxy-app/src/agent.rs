@@ -12,7 +12,7 @@ use oxy_mcp::{
 };
 use oxy_sculpt::{AlphaStamp, BrushSettings};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, sync_channel};
 use std::time::Duration;
 
@@ -37,6 +37,7 @@ struct Bridge {
     closing: Arc<AtomicBool>,
     wake: Arc<dyn Fn() + Send + Sync>,
     changes: Arc<oxy_mcp::state::SharedChanges>,
+    origin: Arc<AtomicU64>,
 }
 
 impl oxy_mcp::Host for Bridge {
@@ -50,9 +51,10 @@ impl oxy_mcp::Host for Bridge {
             return match parse_action(name, arguments) {
                 Ok(Action::Changes { since, timeout_ms }) => {
                     let closing = Arc::clone(&self.closing);
-                    let reply = self.changes.wait(since, Duration::from_millis(timeout_ms.into()), &move || {
+                    let mut reply = self.changes.wait(since, Duration::from_millis(timeout_ms.into()), &move || {
                         closing.load(Ordering::Relaxed)
                     });
+                    reply["session_origin"] = self.origin.load(Ordering::Relaxed).into();
                     ToolResult::ok(reply.to_string())
                 }
                 Ok(_) => ToolResult::error("unexpected arguments for changes"),
@@ -91,11 +93,32 @@ pub struct Inbox {
     /// Tab session id this inbox is latched to (`Some` for Python plugins).
     target_doc_id: Option<u64>,
     changes: Arc<oxy_mcp::state::SharedChanges>,
+    origin: Arc<AtomicU64>,
     pub endpoint: String,
     /// What the undo steps of this listener's edits start with: "Agent: "
     /// for an outside agent, "Plugin: <name>: " for a Python plugin's own
     /// listener, so the history says who made each change.
     label: String,
+}
+
+/// A second listener following the same document also needs to see who
+/// authored the write, even if it does not poll until the next frame.
+pub(crate) struct ChangeObserver {
+    target_doc_id: Option<u64>,
+    changes: Arc<oxy_mcp::state::SharedChanges>,
+}
+
+impl ChangeObserver {
+    fn observe(&self, ed: &Editor, source: Option<(u64, u64)>) {
+        let index = if let Some(id) = self.target_doc_id {
+            let Some(index) = ed.documents.iter().position(|d| d.id == id) else { return };
+            index
+        } else {
+            ed.active_document
+        };
+        let origin = source.filter(|(doc, _)| *doc == ed.documents[index].id).map(|(_, origin)| origin);
+        self.changes.observe_geometry_write(oxy_mcp::state::Snapshot::of(&doc_state_at(ed, index)), origin);
+    }
 }
 
 impl Inbox {
@@ -105,7 +128,14 @@ impl Inbox {
         let (tx, rx) = sync_channel(8);
         let closing = Arc::new(AtomicBool::new(false));
         let changes = Arc::new(oxy_mcp::state::SharedChanges::default());
-        let bridge = Bridge { tx, closing: Arc::clone(&closing), wake, changes: Arc::clone(&changes) };
+        let origin = Arc::new(AtomicU64::new(oxy_mcp::state::new_edit_origin()));
+        let bridge = Bridge {
+            tx,
+            closing: Arc::clone(&closing),
+            wake,
+            changes: Arc::clone(&changes),
+            origin: Arc::clone(&origin),
+        };
         let server = oxy_mcp::serve_loopback(oxy_mcp::Identity::oxybrush(), Box::new(bridge), Arc::clone(&control))?;
         let endpoint = server.endpoint.clone();
         Ok(Self {
@@ -117,6 +147,7 @@ impl Inbox {
             pending_job: None,
             target_doc_id: None,
             changes,
+            origin,
             endpoint,
             label: AGENT_LABEL.to_owned(),
         })
@@ -145,16 +176,17 @@ impl Inbox {
     /// Drop every client by rotating the token. The listener stays up.
     pub fn disconnect(&self) {
         self.control.rotate();
+        self.origin.store(oxy_mcp::state::new_edit_origin(), Ordering::Relaxed);
     }
 
-    /// Run at most one queued call. `Some` is a screenshot to answer after the viewport is drawn.
-    pub fn poll(&mut self, ed: &mut Editor) -> Option<Sender<ToolResult>> {
-        // Note what changed since the last frame, for `changes` callers.
-        let observe_idx = self
-            .target_doc_id
-            .and_then(|id| ed.documents.iter().position(|d| d.id == id))
-            .unwrap_or(ed.active_document);
-        self.changes.observe(oxy_mcp::state::Snapshot::of(&doc_state_at(ed, observe_idx)));
+    pub(crate) fn observer(&self) -> ChangeObserver {
+        ChangeObserver { target_doc_id: self.target_doc_id, changes: Arc::clone(&self.changes) }
+    }
+
+    /// Run pending calls. A screenshot is answered after the viewport is drawn.
+    pub(crate) fn poll(&mut self, ed: &mut Editor, peer: Option<&ChangeObserver>) -> Option<Sender<ToolResult>> {
+        let observer = self.observer();
+        observer.observe(ed, None);
         if let Some((job_doc_id, reply)) = self.pending_job.take() {
             match ed.documents.iter().find(|d| d.id == job_doc_id) {
                 None => {
@@ -192,8 +224,18 @@ impl Inbox {
             log::debug!("agent tool {}", env.name);
             // An agent may read or change any piece: show them all in full.
             let _ = with_target_doc(ed, self.target_doc_id, |ed| ed.restore_light_pieces(None));
+            let geometry_write = oxy_mcp::state::is_geometry_write(&env.name);
+            if geometry_write {
+                observer.observe(ed, None);
+                if let Some(peer) = peer {
+                    peer.observe(ed, None);
+                }
+            }
+            let origin = self.origin.load(Ordering::Relaxed);
+            ed.agent_origin = origin;
             ed.agent_label.clone_from(&self.label);
             let outcome = with_target_doc(ed, self.target_doc_id, |ed| apply(ed, &env.name, &env.args));
+            ed.agent_origin = 0;
             ed.agent_label = AGENT_LABEL.to_owned();
             match outcome {
                 Err(msg) => {
@@ -201,6 +243,13 @@ impl Inbox {
                 }
                 Ok((call_doc_id, applied)) => match applied {
                     Apply::Done(result) => {
+                        if geometry_write && !result.is_error {
+                            let source = Some((call_doc_id, origin));
+                            observer.observe(ed, source);
+                            if let Some(peer) = peer {
+                                peer.observe(ed, source);
+                            }
+                        }
                         let _ = env.reply.send(result);
                     }
                     Apply::PendingJob => {
@@ -216,6 +265,24 @@ impl Inbox {
                     }
                 },
             }
+        }
+    }
+}
+
+pub(crate) fn poll_inboxes(
+    editor: &mut Editor,
+    agent: Option<&mut Inbox>,
+    plugin: Option<&mut Inbox>,
+    screenshot: &mut Option<Sender<ToolResult>>,
+) {
+    let agent_observer = agent.as_deref().map(Inbox::observer);
+    let plugin_observer = plugin.as_deref().map(Inbox::observer);
+    for (inbox, peer) in [(agent, plugin_observer.as_ref()), (plugin, agent_observer.as_ref())] {
+        if screenshot.is_some() {
+            break;
+        }
+        if let Some(inbox) = inbox {
+            *screenshot = inbox.poll(editor, peer);
         }
     }
 }
@@ -342,7 +409,7 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
         }
         Action::SetCamera(camera) => Apply::Done(set_camera(ed, camera)),
         Action::Screenshot => Apply::Screenshot,
-        Action::SceneState => Apply::Done(ToolResult::ok(oxy_mcp::state::scene_state(&doc_state(ed)).to_string())),
+        Action::SceneState => Apply::Done(ToolResult::ok(scene_state(ed).to_string())),
         // Answered by the listener thread (see `Bridge::call_tool`).
         Action::Changes { .. } => Apply::Done(ToolResult::error("changes is answered by the listener")),
         Action::ListStrokes => Apply::Done(ToolResult::ok(ed.living_json().to_string())),
@@ -408,10 +475,10 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
             });
             if ed.job.is_some() { Apply::PendingJob } else { Apply::Done(ToolResult::error(ed.status.clone())) }
         }
-        Action::SetGeometry { path, id, index, name, topology_version } => {
-            Apply::Done(set_geometry(ed, &path, id, index, name.as_deref(), topology_version))
+        Action::SetGeometry { path, id, index, name, topology_version, undo_group } => {
+            Apply::Done(set_geometry(ed, &path, id, index, name.as_deref(), topology_version, undo_group))
         }
-        Action::PatchGeometry { id, index, name, topology_version, patch } => {
+        Action::PatchGeometry { id, index, name, topology_version, undo_group, patch } => {
             let index = match oxy_mcp::state::find_piece(&ed.scene, id, index, name.as_deref()) {
                 Ok(index) => index,
                 Err(error) => return Apply::Done(ToolResult::error(error)),
@@ -422,20 +489,70 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
             }
             let paints = patch.colors.is_some();
             let prefix = ed.agent_label.clone();
+            let group = undo_group.map(|name| oxy_history::GeometryUndoGroup { session: ed.agent_origin, name });
             let doc = &mut ed.documents[ed.active_document];
-            Apply::Done(match patch.apply(&mut doc.scene.pieces[index], &mut doc.history, topology_version, &prefix) {
-                Ok(vertices) => {
-                    if paints && vertices > 0 {
-                        ed.view.show_vertex_color = true;
+            Apply::Done(
+                match patch.apply(&mut doc.scene.pieces[index], &mut doc.history, topology_version, &prefix, group) {
+                    Ok(vertices) => {
+                        if paints && vertices > 0 {
+                            ed.view.show_vertex_color = true;
+                        }
+                        let message = format!("Patched {vertices} vertices");
+                        ed.status = message.clone();
+                        ToolResult::ok(message)
                     }
-                    let message = format!("Patched {vertices} vertices");
-                    ed.status = message.clone();
-                    ToolResult::ok(message)
-                }
-                Err(error) => ToolResult::error(error),
-            })
+                    Err(error) => ToolResult::error(error),
+                },
+            )
         }
     }
+}
+
+fn scene_state(ed: &Editor) -> serde_json::Value {
+    use oxy_render::lighting::LightKind;
+    use serde_json::json;
+
+    let mut state = oxy_mcp::state::scene_state(&doc_state(ed));
+    let (scene, camera) = ed.light_frames();
+    let lighting = &ed.view.lighting;
+    let lights: Vec<_> = lighting
+        .lights
+        .iter()
+        .enumerate()
+        .filter(|(_, light)| light.on)
+        .map(|(slot, light)| {
+            let mut info = json!({
+                "slot": slot, "kind": light.kind.label().to_ascii_lowercase(),
+                "color_linear": light.color, "intensity": light.intensity,
+                "follow_camera": light.follow_camera, "shadows": light.shadows, "softness": light.softness,
+            });
+            if light.kind == LightKind::Sun {
+                info["direction_to_light"] = json!(light.sun_direction(&camera).to_array());
+            } else {
+                info["position"] = json!(light.world_position(&scene, &camera).to_array());
+                info["falloff"] = json!(light.falloff);
+                if matches!(light.kind, LightKind::Spot | LightKind::Area) {
+                    info["aim"] = json!(light.world_aim(&scene, &camera).to_array());
+                }
+                if light.kind == LightKind::Spot {
+                    info["cone_half_angle_deg"] = json!(light.cone);
+                    info["cone_edge"] = json!(light.cone_edge);
+                }
+                if light.kind == LightKind::Area {
+                    info["diameter"] = json!(light.size * scene.size);
+                }
+            }
+            info
+        })
+        .collect();
+    state["lighting"] = json!({
+        "enabled": lighting.enabled, "light_matcap": lighting.light_matcap, "shadows": lighting.shadows,
+        "lights": lights, "scene_size": scene.size,
+        "sky_linear": lighting.sky, "ground_linear": lighting.ground, "ambient": lighting.ambient,
+        "rim": lighting.rim, "exposure_stops": lighting.exposure,
+        "surface_linear": lighting.surface, "roughness": lighting.roughness, "specular": lighting.specular,
+    });
+    state
 }
 
 /// The document as the structured tools describe it.
@@ -835,6 +952,7 @@ fn set_geometry(
     index: Option<usize>,
     name: Option<&str>,
     topology_version: Option<u64>,
+    undo_group: Option<String>,
 ) -> ToolResult {
     if let Some(err) = blocked(ed) {
         return err;
@@ -861,6 +979,7 @@ fn set_geometry(
             Ok(w) => w,
             Err(e) => return ToolResult::error(e),
         };
+    let group = undo_group.map(|name| oxy_history::GeometryUndoGroup { session: ed.agent_origin, name });
     let paint = write.colors.is_some() || piece.mesh.is_painted();
     let summary = write.summary();
     let piece_id = piece.id;
@@ -869,14 +988,14 @@ fn set_geometry(
     let applied = {
         let doc = &mut ed.documents[ed.active_document];
         let mesh = &mut doc.scene.pieces[i].mesh;
-        doc.history.begin_with(&label, piece_id, mesh, paint);
+        doc.history.begin_with(&label, piece_id, mesh, paint || group.is_some());
         let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
         for &c in &chunks {
             doc.history.touch(mesh, c);
         }
         match oxy_mcp::state::apply_geometry_write(mesh, write) {
             Ok(what) => {
-                doc.history.commit();
+                doc.history.commit_geometry(group);
                 Ok(what)
             }
             Err(e) => {
@@ -960,6 +1079,25 @@ mod tests {
         let bounds = ed.scene.bounds();
         ed.camera.frame(bounds);
         ed
+    }
+
+    #[test]
+    fn scene_state_reports_the_desktop_light_rig_in_world_space() {
+        let mut ed = editor();
+        let slot = &mut ed.view.lighting.lights[0];
+        slot.on = true;
+        slot.kind = oxy_render::lighting::LightKind::Area;
+        slot.position = [0.4, 0.2, 0.6];
+        slot.follow_camera = true;
+        ed.camera.yaw = 0.75;
+        let (scene, camera) = ed.light_frames();
+        let expected = ed.view.lighting.lights[0].world_position(&scene, &camera);
+        let json = scene_state(&ed);
+        let light = &json["lighting"]["lights"][0];
+        assert_eq!(light["kind"], "area");
+        assert_eq!(light["position"], serde_json::json!(expected.to_array()));
+        assert_eq!(light["scene_size"], serde_json::Value::Null);
+        assert_eq!(json["lighting"]["scene_size"], serde_json::json!(scene.size));
     }
 
     #[test]
@@ -1187,7 +1325,7 @@ mod tests {
             reply: reply_tx,
         })
         .unwrap();
-        inbox.poll(&mut ed);
+        inbox.poll(&mut ed, None);
         let res = reply_rx.recv().unwrap();
         assert!(!res.is_error, "{}", res.text);
         assert_eq!(ed.active_document, 1, "active tab must stay on tab 1");
@@ -1208,7 +1346,7 @@ mod tests {
             reply: reply_tx2,
         })
         .unwrap();
-        inbox.poll(&mut ed);
+        inbox.poll(&mut ed, None);
         let err = reply_rx2.recv().unwrap();
         assert!(err.is_error && err.text.contains("closed"), "{}", err.text);
         assert_eq!(ed.scene.pieces.len(), tab1_before);

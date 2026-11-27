@@ -6,6 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Plugin geometry editing** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Repeated writes can share one Undo step. Change events identify their source, and desktop scene state includes the viewport light rig.
+- **Brush alpha import** ([#601](https://github.com/crisprintsstuff/OxyBrush/issues/601)). Load JPEG, TIFF, WebP and grayscale or RGB PSD composites alongside PNG.
 - **Retopology Contour** ([#576](https://github.com/crisprintsstuff/OxyBrush/issues/576)). Draw successive cuts across a limb to create rings and connect them with a quad strip.
 - **Python and MCP plugins** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Patch selected vertices in one undo step, and display a temporary RGBA render that clears when the desktop camera, viewport dimensions, or scene changes.
 - **Also paint RGB Strength** ([#585](https://github.com/crisprintsstuff/OxyBrush/issues/585)). Set color opacity independently of sculpt strength. The value is kept per brush and travels with presets and stroke recipes.
@@ -30,6 +32,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Scene Project Stamp.** Dragging to resize the stamp reuses the target meshes for the gesture, reducing preview work on dense scenes.
 
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
+- **Alpha rotation and Roll** ([#601](https://github.com/crisprintsstuff/OxyBrush/issues/601)). The thumbnail follows the rotation slider. Directional alphas align from the first dab, and Roll filters repeat seams and keeps its pitch steady as pressure changes the width.
 - **Sculpt Layers.** Sculpt and paint strokes stay editable when switching or adding subdivision levels. Strength changes affect fine geometry and color even from a lower level and survive Undo, Redo, and saving.
 
 ## [4.1.2] - 2026-11-26

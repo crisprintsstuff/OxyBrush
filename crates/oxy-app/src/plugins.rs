@@ -477,7 +477,7 @@ mod tests {
 
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(30) {
-            let _ = inbox.poll(&mut ed);
+            let _ = inbox.poll(&mut ed, None);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
                 break;
@@ -521,7 +521,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(30) {
-            let _ = inbox.poll(&mut ed);
+            let _ = inbox.poll(&mut ed, None);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
                 break;
@@ -585,7 +585,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(60) {
-            let _ = inbox.poll(&mut ed);
+            let _ = inbox.poll(&mut ed, None);
             ed.poll_job();
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
@@ -625,7 +625,7 @@ mod tests {
 
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(30) {
-            let _ = inbox.poll(&mut ed);
+            let _ = inbox.poll(&mut ed, None);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
                 break;
@@ -665,7 +665,7 @@ mod tests {
 
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(30) {
-            let _ = inbox.poll(&mut ed);
+            let _ = inbox.poll(&mut ed, None);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
                 break;

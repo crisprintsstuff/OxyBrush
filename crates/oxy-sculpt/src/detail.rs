@@ -621,6 +621,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: None,
             events: vec![event(0.0, 0.0), event(2.0, 0.0), event(4.0, 0.0), event(4.0, 1.5)],
         };
@@ -723,6 +724,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: None,
             events: vec![RecipeEvent::Sample {
                 sample: StrokeSample { position: Vec3::new(1.0, 2.0, 3.0), normal: Vec3::Y, pressure: 0.8 },
@@ -759,6 +761,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: None,
             events: vec![RecipeEvent::Sample { sample, spacing: 0.1, strength: 1.0, max_dabs: 0 }],
         };

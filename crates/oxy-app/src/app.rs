@@ -368,14 +368,12 @@ impl App {
 
     /// Apply one queued agent call. A screenshot is answered after the viewport is drawn.
     fn poll_agent(&mut self) {
-        for inbox in [self.agent.as_mut(), self.plugin_inbox.as_mut()].into_iter().flatten() {
-            if self.shot_reply.is_some() {
-                return;
-            }
-            if let Some(reply) = inbox.poll(&mut self.editor) {
-                self.shot_reply = Some(reply);
-            }
-        }
+        crate::agent::poll_inboxes(
+            &mut self.editor,
+            self.agent.as_mut(),
+            self.plugin_inbox.as_mut(),
+            &mut self.shot_reply,
+        );
     }
 
     /// Check if a background Python plugin process has completed.
@@ -805,13 +803,7 @@ impl App {
         ed.tick_autosave();
         ed.updater.tick(crate::updates::now_secs());
         // Agent calls run after the user's finished job and before the mesh is uploaded.
-        for inbox in [self.agent.as_mut(), self.plugin_inbox.as_mut()].into_iter().flatten() {
-            if self.shot_reply.is_none()
-                && let Some(reply) = inbox.poll(ed)
-            {
-                self.shot_reply = Some(reply);
-            }
-        }
+        crate::agent::poll_inboxes(ed, self.agent.as_mut(), self.plugin_inbox.as_mut(), &mut self.shot_reply);
         let title = ed.title();
         if self.applied_title != title {
             g.window.set_title(&title);
@@ -1331,7 +1323,13 @@ impl App {
                 if self.dialog_active {
                     return;
                 }
-                let mut dialog = rfd::AsyncFileDialog::new().add_filter("PNG image", &["png", "PNG"]);
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter(
+                    "Alpha image",
+                    &[
+                        "png", "jpg", "jpeg", "tif", "tiff", "webp", "psd", "PNG", "JPG", "JPEG", "TIF", "TIFF",
+                        "WEBP", "PSD",
+                    ],
+                );
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
                 }
