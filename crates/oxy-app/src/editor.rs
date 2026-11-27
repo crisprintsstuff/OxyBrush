@@ -3517,6 +3517,7 @@ impl Editor {
             also_paint: self.brush_also_paints(kind),
             rgb_strength: self.brush_rgb_override(kind).filter(|_| self.brush_also_paints(kind)),
             auto_smooth: self.auto_smooth,
+            legacy_triangle_smooth: false,
             gravity: self.gravity(kind),
             spray: self.spray,
             noise_scale: self.noise_scale,
@@ -17514,6 +17515,80 @@ mod tests {
         let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Sphere", "Aye", "Mid", "Zed"]);
         assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn shift_smooth_respects_quad_edges_on_obj_fbx_and_linked_meshes() {
+        let dir = import_dir("import-smooth-quads");
+        let obj = dir.join("grid.obj");
+        let fbx = dir.join("grid.fbx");
+        let link = dir.join("grid.oxylink.json");
+        std::fs::write(
+            &obj,
+            "v -1 -1 0\nv 0 -1 0\nv 1 -1 0\nv -1 0 0\nv 0 0 0.2\nv 1 0 0\nv -1 1 0\nv 0 1 0\nv 1 1 0\n\
+             f 1 2 5 4\nf 5 2 3 6\nf 4 5 8 7\nf 5 6 9 8\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &fbx,
+            r#"; FBX 7.4.0 project file
+FBXHeaderExtension: {
+    FBXHeaderVersion: 1003
+    FBXVersion: 7400
+}
+Objects: {
+    Model: 100, "Model::Grid", "Mesh" {
+    }
+    Geometry: 200, "Geometry::", "Mesh" {
+        Vertices: *27 {
+            a: -1,-1,0, 0,-1,0, 1,-1,0, -1,0,0, 0,0,0.2, 1,0,0, -1,1,0, 0,1,0, 1,1,0
+        }
+        PolygonVertexIndex: *16 {
+            a: 0,1,4,-4, 4,1,2,-6, 3,4,7,-7, 4,5,8,-8
+        }
+    }
+}
+Connections: {
+    C: "OO",200,100
+}
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &link,
+            r#"{"format":"oxybrush-link","version":1,"app":"Blender","objects":[
+                {"name":"Grid","obj":"grid.obj","result":"out/grid.obj",
+                 "matrix":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}]}"#,
+        )
+        .unwrap();
+
+        for (path, axis) in [(&obj, Vec3::Z), (&fbx, Vec3::Z), (&link, Vec3::Y)] {
+            let mut e = editor();
+            e.scene.pieces[0].visible = false;
+            if path == &link {
+                e.open_link_now(path);
+                assert!(e.bridge.is_some(), "{}", e.status);
+            } else {
+                e.import(path);
+            }
+            let mesh = &e.scene.active().mesh;
+            assert_eq!(mesh.known_polygons().unwrap().0.len(), 4);
+            let before = mesh.positions.clone();
+            let bounds = mesh.bounds();
+            let spike = before.iter().position(|p| p.dot(axis) > 0.1).unwrap();
+            e.camera.frame(bounds);
+            e.view_from_axis(axis);
+            center(&mut e);
+            e.modifiers.shift = true;
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_up();
+            let p = e.scene.active().mesh.positions[spike];
+            assert!(p.dot(axis) < before[spike].dot(axis), "{path:?}: the brush lowers the spike");
+            assert!(p.cross(axis).length() < 1e-6, "{path:?}: the spike stays in its edge loop");
+            e.undo();
+            assert_eq!(e.scene.active().mesh.positions, before, "{path:?}");
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -36,6 +36,28 @@ impl Csr {
         }
         Csr { offsets, items }
     }
+
+    /// Index an undirected edge list by both endpoints.
+    pub fn edge_neighbors(vertex_count: usize, edges: impl Iterator<Item = [u32; 2]> + Clone) -> Self {
+        let edges = edges.filter(|&[a, b]| a != b && (a as usize) < vertex_count && (b as usize) < vertex_count);
+        let mut offsets = vec![0u32; vertex_count + 1];
+        for [a, b] in edges.clone() {
+            offsets[a as usize + 1] += 1;
+            offsets[b as usize + 1] += 1;
+        }
+        for i in 0..vertex_count {
+            offsets[i + 1] += offsets[i];
+        }
+        let mut items = vec![0u32; offsets[vertex_count] as usize];
+        let mut cursor = offsets.clone();
+        for [a, b] in edges {
+            items[cursor[a as usize] as usize] = b;
+            items[cursor[b as usize] as usize] = a;
+            cursor[a as usize] += 1;
+            cursor[b as usize] += 1;
+        }
+        Csr { offsets, items }
+    }
 }
 
 /// The neighbours of one vertex (the other corners of its triangles),
@@ -49,11 +71,11 @@ pub struct Neighbors {
 }
 
 impl Neighbors {
-    pub(crate) fn gather(v: u32, around: &[u32], triangles: &[[u32; 3]]) -> Self {
+    pub(crate) fn gather(v: u32, around: &[u32], triangles: &[[u32; 3]], keep: impl Fn(u32) -> bool) -> Self {
         let mut n = Neighbors { len: 0, inline: [0; 64], spill: Vec::new() };
         if around.len() * 2 > n.inline.len() {
             // More than 32 triangles around it (a cone's tip, say).
-            n.spill = around.iter().flat_map(|&t| triangles[t as usize]).filter(|&o| o != v).collect();
+            n.spill = around.iter().flat_map(|&t| triangles[t as usize]).filter(|&o| o != v && keep(o)).collect();
             n.spill.sort_unstable();
             n.spill.dedup();
             return n;
@@ -64,7 +86,7 @@ impl Neighbors {
         let mut len = 0;
         for &t in around {
             for &o in &triangles[t as usize] {
-                if o != v {
+                if o != v && keep(o) {
                     n.inline[len] = o;
                     len += 1;
                 }

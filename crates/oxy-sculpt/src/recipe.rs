@@ -141,7 +141,7 @@ impl StrokeRecipe {
     ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5), 128 smooth paint (version 7)
     /// [version 9+: also_paint:u8]
     /// [version 10+: rgb_strength:f32]
-    /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
+    /// symmetry:u8   1 x, 2 y, 4 z, 8 polygon smoothing;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
     /// [version 6+: hue:f32 saturation:f32 value:f32 per_dab:u8 seed:u64]
@@ -214,7 +214,8 @@ impl StrokeRecipe {
             put_f32(&mut b, s.rgb_strength.unwrap_or(s.strength));
         }
         let y = &self.symmetry;
-        b.push(u8::from(y.x) | u8::from(y.y) << 1 | u8::from(y.z) << 2);
+        // Older writers left bit 3 clear and readers mask the mirror bits.
+        b.push(u8::from(y.x) | u8::from(y.y) << 1 | u8::from(y.z) << 2 | u8::from(!s.legacy_triangle_smooth) << 3);
         b.extend_from_slice(&y.radial.to_le_bytes());
         b.push(match y.radial_axis {
             Axis::X => 0,
@@ -318,7 +319,8 @@ impl StrokeRecipe {
         let flags = r.u8()?;
         let also_paint = version >= 9 && r.u8()? != 0;
         let rgb_strength = if version >= 10 { Some(r.f32()?.clamp(0.0, 1.0)) } else { None };
-        let settings = BrushSettings {
+        let sym = r.u8()?;
+        let mut settings = BrushSettings {
             kind,
             radius,
             strength,
@@ -333,6 +335,7 @@ impl StrokeRecipe {
             also_paint,
             rgb_strength,
             auto_smooth,
+            legacy_triangle_smooth: sym & 8 == 0,
             gravity,
             spray,
             noise_scale,
@@ -340,8 +343,6 @@ impl StrokeRecipe {
             insert_shape,
             pressure_curves: [crate::LINEAR_PRESSURE_SHAPE; 2],
         };
-        let mut settings = settings;
-        let sym = r.u8()?;
         let radial = r.u32()?;
         let radial_axis = match r.u8()? {
             0 => Axis::X,
@@ -835,6 +836,28 @@ mod tests {
             assert_eq!(old.settings.pressure_curves, [crate::LINEAR_PRESSURE_SHAPE; 2]);
             assert_eq!(old.events, recipe.events);
         }
+    }
+
+    #[test]
+    fn saved_smoothing_replays_with_its_original_neighborhood() {
+        let base = primitives::cylinder_with(24, 8, 1.0, 2.0, false);
+        let sample = StrokeSample { position: Vec3::Z, normal: Vec3::Z, pressure: 1.0 };
+        let mut results = Vec::new();
+        for legacy_triangle_smooth in [false, true] {
+            let settings =
+                BrushSettings { kind: BrushKind::Smooth, radius: 0.4, legacy_triangle_smooth, ..Default::default() };
+            let mut live = base.clone();
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_recording();
+            stroke.stamp(&mut live, sample, 1, &mut |_, _| {});
+            let recipe = stroke.take_recipe().unwrap();
+            let loaded = StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_| None).unwrap();
+            assert_eq!(loaded.settings.legacy_triangle_smooth, legacy_triangle_smooth);
+            let mut replayed = base.clone();
+            loaded.replay(&mut replayed, &mut |_, _| {});
+            assert_eq!(live.positions, replayed.positions);
+            results.push(live.positions);
+        }
+        assert_ne!(results[0], results[1], "recorded smoothing modes differ on the same quad cage");
     }
 
     #[test]

@@ -253,6 +253,8 @@ pub struct Mesh {
     /// triangles an n-gon was split into), when the mesh was built from
     /// polygons. Like quad diagonals, a wireframe leaves them out.
     ngon_edges: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<[u32; 2]>>>,
+    /// Lazily indexed by endpoint for polygon-aware smoothing.
+    polygon_inner_neighbors: std::sync::OnceLock<Option<std::sync::Arc<Csr>>>,
 }
 
 impl Mesh {
@@ -385,6 +387,7 @@ impl Mesh {
             edits: 0,
             quad_cache: std::sync::OnceLock::new(),
             ngon_edges: std::sync::OnceLock::new(),
+            polygon_inner_neighbors: std::sync::OnceLock::new(),
         };
         mesh.recompute_all_normals();
         let bounds: Vec<Aabb> = (0..mesh.chunks.len()).into_par_iter().map(|c| mesh.chunk_bounds(c)).collect();
@@ -1833,7 +1836,25 @@ impl Mesh {
     }
 
     pub fn neighbors(&self, v: u32) -> adjacency::Neighbors {
-        adjacency::Neighbors::gather(v, self.vertex_triangles.get(v as usize), &self.triangles)
+        adjacency::Neighbors::gather(v, self.vertex_triangles.get(v as usize), &self.triangles, |_| true)
+    }
+
+    /// One-ring neighbors across original polygon edges, when known.
+    /// With only triangles, returns the same neighbors as [Self::neighbors].
+    pub fn polygon_neighbors(&self, v: u32) -> adjacency::Neighbors {
+        let Some(ngon) = self.ngon_edges.get() else { return self.neighbors(v) };
+        let inner = self.polygon_inner_neighbors.get_or_init(|| {
+            let quads = self.quad_diagonals_ref();
+            (!quads.is_empty() || !ngon.is_empty()).then(|| {
+                let edges = quads.iter().chain(ngon.iter()).copied();
+                std::sync::Arc::new(Csr::edge_neighbors(self.vertex_count(), edges))
+            })
+        });
+        let Some(inner) = inner else { return self.neighbors(v) };
+        let excluded = inner.get(v as usize);
+        adjacency::Neighbors::gather(v, self.vertex_triangles.get(v as usize), &self.triangles, |other| {
+            !excluded.contains(&other)
+        })
     }
 
     pub fn vertex_triangles(&self, v: u32) -> &[u32] {
@@ -2068,6 +2089,10 @@ impl Mesh {
             ("source_vertex", v(&self.source_vertex)),
             ("source_triangle", v(&self.source_triangle)),
             ("vertex_triangles", self.vertex_triangles.bytes()),
+            (
+                "polygon_inner_neighbors",
+                self.polygon_inner_neighbors.get().and_then(Option::as_deref).map_or(0, Csr::bytes),
+            ),
             ("vertex_chunk", v(&self.vertex_chunk)),
             ("dirty", v(&self.dirty)),
             ("loose_bounds", v(&self.loose_bounds)),
@@ -3030,6 +3055,25 @@ mod tests {
         for (c, e) in m.chunks.iter().zip(&exact) {
             assert!((c.aabb.min - e.min).length() < 1e-5 && (c.aabb.max - e.max).length() < 1e-5);
         }
+    }
+
+    #[test]
+    fn polygon_neighbors_omit_ngon_diagonals() {
+        let positions = (0..5)
+            .map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 5.0;
+                Vec3::new(angle.cos(), angle.sin(), 0.0)
+            })
+            .collect();
+        let mesh = Mesh::new(positions, vec![[0, 1, 2], [0, 2, 3], [0, 3, 4]]);
+        let vertex = |source| mesh.source_vertices().iter().position(|&v| v == source).unwrap() as u32;
+        let corner = vertex(0);
+        assert_eq!(mesh.polygon_neighbors(corner).len(), 4, "unmarked triangles keep their edges");
+        mesh.set_quad_diagonals(Default::default());
+        mesh.set_ngon_edges([2, 3].map(|v| [corner.min(vertex(v)), corner.max(vertex(v))]).into_iter().collect());
+        let mut neighbors = [vertex(1), vertex(4)];
+        neighbors.sort_unstable();
+        assert_eq!(&*mesh.polygon_neighbors(corner), &neighbors);
     }
 
     #[test]
