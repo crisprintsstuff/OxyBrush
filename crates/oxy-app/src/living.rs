@@ -2830,7 +2830,8 @@ mod tests {
         stroke(&mut e, 300.0);
         stroke(&mut e, 320.0);
         let sculpted = positions(&e);
-        e.subdivide(true);
+        let rebuilt = oxy_mesh::topo::subdivide(&e.scene.active().mesh, 1);
+        e.replace_active_mesh("Topology rebuild", rebuilt);
         e.living_sync();
         assert!(e.living.strokes.is_empty());
         assert!(e.living.note.as_deref().is_some_and(|n| n.contains("baked")));
