@@ -757,10 +757,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
             });
             tips::menu(ui, "Edit", plain::EDIT, |ui| {
-                if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo", Cmd::Undo).clicked() {
+                if tips::button_on_km(ui, &ed.keymap, ed.can_undo(), "Undo", Cmd::Undo).clicked() {
                     ed.undo();
                 }
-                if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
+                if tips::button_on_km(ui, &ed.keymap, ed.can_redo(), "Redo", Cmd::Redo).clicked() {
                     ed.redo();
                 }
                 ui.separator();
@@ -2905,14 +2905,10 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
     egui::Panel::top("toolbar").show(ui, |ui| {
         ui.add_space(3.0);
         ui.horizontal(|ui| {
-            if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &Cmd::Undo.tip_in(&ed.keymap))
-                .clicked()
-            {
+            if widgets::icon_button(ui, Icon::Undo, false, ed.can_undo(), &Cmd::Undo.tip_in(&ed.keymap)).clicked() {
                 ed.undo();
             }
-            if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), &Cmd::Redo.tip_in(&ed.keymap))
-                .clicked()
-            {
+            if widgets::icon_button(ui, Icon::Redo, false, ed.can_redo(), &Cmd::Redo.tip_in(&ed.keymap)).clicked() {
                 ed.redo();
             }
             ui.separator();
@@ -4183,10 +4179,10 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             ui.separator();
             if ed.layout == UiLayout::Touch {
                 // Undo/redo within thumb reach (no keyboard on a tablet).
-                if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &Cmd::Undo.tip()).clicked() {
+                if widgets::icon_button(ui, Icon::Undo, false, ed.can_undo(), &Cmd::Undo.tip()).clicked() {
                     ed.undo();
                 }
-                if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), &Cmd::Redo.tip()).clicked() {
+                if widgets::icon_button(ui, Icon::Redo, false, ed.can_redo(), &Cmd::Redo.tip()).clicked() {
                     ed.redo();
                 }
                 ui.separator();
@@ -4818,6 +4814,14 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
     if ed.oxymorph_preview_pair().is_some() {
+        if let Some((brush, _, _)) = ed.oxymorph_brush() {
+            return match brush {
+                oxy_mesh::morph::MixBrush::KeepA => "OxyMorph · drag to keep A · drag off the mesh to orbit",
+                oxy_mesh::morph::MixBrush::KeepB => "OxyMorph · drag to keep B · drag off the mesh to orbit",
+                oxy_mesh::morph::MixBrush::Erase => "OxyMorph · drag to erase pins · drag off the mesh to orbit",
+            }
+            .into();
+        }
         return "OxyMorph preview · drag to orbit · wheel to zoom".into();
     }
     if let Some(pe) = ed.poly_edit.as_ref() {
@@ -8962,6 +8966,15 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         return;
     }
     let painter = ui.painter().with_clip_rect(canvas);
+
+    if ed.oxymorph_preview_pair().is_some() {
+        if let Some((_, radius, color)) = ed.oxymorph_brush() {
+            painter.circle_stroke(pos, radius, EStroke::new(1.5, color));
+        } else {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::AllScroll);
+        }
+        return;
+    }
 
     // Draw symmetry reflection indicators on the active sculpt surface
     draw_symmetry_indicators(&painter, ed, canvas, p);

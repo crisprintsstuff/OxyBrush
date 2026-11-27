@@ -1,6 +1,6 @@
 # RFC 0056 — OxyMorph
 
-- **Status:** First native slice in development. The browser prototype demonstrates the proposed painted mix and linked panes.
+- **Status:** Native forking, live blending, and paintable pins implemented. The browser prototype also demonstrates linked panes.
 - **Scope:** Try two sculpt directions on one piece and paint a third version from them.
 
 ## 1. Concept
@@ -77,17 +77,27 @@ blocks for the feature.
   session and fork correspondence are scoped to the current project
   session.
 
+### Painted mix
+
+- In **Preview mix**, choose **Keep A** or **Keep B** and brush on the
+  displayed surface. At full strength the center of the brush pins to that
+  variant. Softer areas still respond to the mix slider. **Erase** fades
+  pins back to slider control.
+- **Show paint map** displays A's pins in blue, B's in orange, and unpainted
+  areas in gray. The map and sculpt masks are independent. Orbit by dragging
+  off the mesh or choosing **Orbit**.
+- Undo and redo step through the last 32 whole paint strokes while the preview is on.
+  Escape cancels the current stroke. Turn off the preview or select A or B
+  to sculpt a source or undo source edits. Preview the pair again to see
+  both the latest source shapes and the retained pins. Choosing a different
+  B or closing the panel starts with a blank map the next time.
+- **Create piece from mix** records one scene Undo step. The piece keeps A's
+  material, color, and mesh attributes.
+
 ### Follow-up scope
 
-- Start from one active piece at its displayed level and fork matched
-  positions into A and B. Use topology-preserving sculpt brushes. Keep
-  end states and the mix map separate while exploring.
-- Orbit and frame the preview views together. Give the center view a
-  map overlay that shows where each version contributes. The map is
-  separate from the active sculpt mask.
-- Preview continuously. **Create piece from mix** creates a regular piece
-  with one Undo step. Closing or cancelling exploration leaves the source
-  piece intact. Persistence of in-progress variants is a follow-up.
+- Add linked comparison views so A, the mix, and B can be framed and
+  orbited together. Persist in-progress sessions with projects.
 - Limit the first pass to positions. Starting on dense imported meshes,
   mixing paint/materials, comparing different topology, changing
   subdivision levels within a session, and exporting animated blends need
@@ -106,15 +116,14 @@ result   = position_a + (position_b - position_a) * weight_b
 ```
 
 Use the same vertex identity across A, B, the mix, and the paint field.
-Pick on displayed geometry, then apply a surface-connected falloff over
-the corresponding shared mesh. The prototype uses distance on its
-original sphere. Native tests need to exercise thin and folded surfaces.
+Pick on displayed geometry and walk visible triangle edges within the
+brush radius. A nearby fold is reachable only if the path along the
+surface fits within the brush radius.
 
 Validate the shared topology version before showing the blend or creating
-the result. A global slider change can move every point. Use chunk-local
-position deltas and dirty ranges for future painted changes. Keep geometry
-evaluation GPU-free and measure how much copying and redraw the session
-adds. Strongly opposing edits can self-intersect during interpolation.
+the result. A global slider change can move every point. Paint updates the
+vertices reached by the brush and the affected mesh chunks. Strongly
+opposing edits can self-intersect during interpolation.
 Test that explicitly before defining any automatic guard.
 
 ## 5. Review and acceptance

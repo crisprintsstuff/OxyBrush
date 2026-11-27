@@ -496,6 +496,7 @@ fn fs_main(
     // in-between used to get the full weight and the full boost, and
     // came out brighter than both sides: a bright outline around every
     // painted area. Now the edge eases from the material into the color.
+    let color_map = piece.material.w > 0.5;
     let paint_w = smoothstep(0.0, 0.9, distance(i.paint, vec3<f32>(1.0))) * u.floor_center.z;
     if (paint_w > 0.0) {
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
@@ -537,6 +538,12 @@ fn fs_main(
     }
     let m = clamp(i.mask, 0.0, 1.0) * u.params.y;
     color = mix(color, color * u.mask_color.rgb, m);
+    if (color_map) {
+        // Keep enough geometric shading to see the form, using the same
+        // palette even when a mask or face-group display is enabled.
+        let shade = 0.4 + 0.6 * max(n.z, 0.0);
+        color = i.paint * shade;
+    }
     var out: FsOut;
     out.color = vec4<f32>(color, 1.0);
     out.normal_depth = vec4<f32>(n, i.view_depth);

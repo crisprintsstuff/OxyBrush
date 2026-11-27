@@ -813,6 +813,7 @@ pub enum SelectAction {
 
 pub enum Drag {
     None,
+    OxyMorphPaint,
     /// A Paint Groups stroke: painting face group `group` on `piece`, whose
     /// groups were `before` when it started (for undo or Escape). `last`
     /// is the previous dab, to fill the path between pointer events.
@@ -2165,6 +2166,7 @@ impl Editor {
                 | Drag::CurveCut { .. }
                 | Drag::ShapeCut { .. }
                 | Drag::GroupPaint { .. }
+                | Drag::OxyMorphPaint
         )
     }
 
@@ -2178,6 +2180,7 @@ impl Editor {
                 | Drag::CurveCut { .. }
                 | Drag::ShapeCut { .. }
                 | Drag::GroupPaint { .. }
+                | Drag::OxyMorphPaint
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
                 | Drag::CurveDraw { .. }
@@ -2866,6 +2869,9 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        if matches!(self.drag, Drag::OxyMorphPaint) {
+            self.pointer_up();
+        }
         if self.split.is_split() {
             if button == PointerButton::Primary
                 && crate::split_view::on_divider(self.split, self.canvas_full, self.split_ratio, p)
@@ -2896,8 +2902,12 @@ impl Editor {
             return;
         }
         if self.oxymorph_preview_pair().is_some() {
-            let action = self.keymap.nav_action(NavButton::Left, self.active_modifiers()).unwrap_or(NavAction::Orbit);
-            self.drag = self.drag_for_nav(Some(action), button);
+            let action = self.keymap.nav_action(NavButton::Left, self.active_modifiers());
+            self.drag = if action.is_none() && self.oxymorph_paint_start(p) {
+                Drag::OxyMorphPaint
+            } else {
+                self.drag_for_nav(Some(action.unwrap_or(NavAction::Orbit)), button)
+            };
             return;
         }
         // A curve selection being clicked out takes every click.
@@ -4093,6 +4103,10 @@ impl Editor {
             | Drag::PolyEdit(_)
             | Drag::PolyPaintPick { .. }
             | Drag::PolyGizmo(_) => true,
+            Drag::OxyMorphPaint => {
+                self.oxymorph_paint_move(pos);
+                true
+            }
             Drag::Orbit => {
                 // Orbit around the cursor: the pivot is picked where the
                 // press was, on the drag's first move.
@@ -4514,6 +4528,11 @@ impl Editor {
     }
 
     fn finish_pointer_gesture(&mut self, background: bool) {
+        if matches!(self.drag, Drag::OxyMorphPaint) {
+            self.drag = Drag::None;
+            self.oxymorph_paint_end(false);
+            return;
+        }
         if std::mem::take(&mut self.split_dragging) {
             return;
         }
@@ -4708,6 +4727,11 @@ impl Editor {
 
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
+        if matches!(self.drag, Drag::OxyMorphPaint) {
+            self.drag = Drag::None;
+            self.oxymorph_paint_end(true);
+            return;
+        }
         self.insert_preview = None;
         if self.select_curve.take().is_some() {
             self.status = "Curve selection cancelled".into();
@@ -5366,6 +5390,9 @@ impl Editor {
             self.spheres_undo();
             return;
         }
+        if self.oxymorph_history_step(false) {
+            return;
+        }
         if self.undo_per_piece { self.undo_piece() } else { self.undo_scene() }
     }
 
@@ -5379,7 +5406,18 @@ impl Editor {
             self.spheres_redo();
             return;
         }
+        if self.oxymorph_history_step(true) {
+            return;
+        }
         if self.undo_per_piece { self.redo_piece() } else { self.redo_scene() }
+    }
+
+    pub(crate) fn can_undo(&self) -> bool {
+        self.oxymorph_can_history(false).unwrap_or_else(|| self.history.can_undo())
+    }
+
+    pub(crate) fn can_redo(&self) -> bool {
+        self.oxymorph_can_history(true).unwrap_or_else(|| self.history.can_redo())
     }
 
     /// Undo the last change to the active piece only, skipping changes to
@@ -11318,6 +11356,52 @@ mod tests {
         assert!(e.oxymorph.is_none());
         e.switch_tab(a);
         assert!(e.oxymorph.is_some());
+    }
+
+    #[test]
+    fn oxymorph_drag_is_one_undo_step_and_escape_cancels() {
+        use oxy_mesh::morph::MixBrush;
+
+        let mut e = editor();
+        let a = e.scene.active().id;
+        let original = e.scene.active().mesh.positions.clone();
+        e.oxymorph_open();
+        e.oxymorph_fork();
+        let b = e.scene.active().id;
+        let shifted: Vec<_> = original.iter().map(|p| *p + Vec3::X * 0.15).collect();
+        e.scene.active_mut().mesh.replace_positions(shifted.clone());
+        e.oxymorph_refresh();
+        let unpainted = e.preview_mesh_mut().unwrap().positions.clone();
+        assert!(!e.can_undo());
+        e.oxymorph.as_mut().unwrap().set_brush(Some(MixBrush::KeepB));
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::OxyMorphPaint));
+        for x in [416.0, 435.0, 460.0] {
+            assert!(e.pointer_moved(Vec2::new(x, 300.0)));
+        }
+        e.pointer_released();
+        let painted = e.preview_mesh_mut().unwrap().positions.clone();
+        assert_ne!(painted, unpainted);
+        assert!(painted.iter().zip(&shifted).any(|(p, b)| p == b));
+        assert!(painted.iter().zip(&unpainted).any(|(p, u)| p == u));
+        let revision = e.history.revision();
+        e.undo();
+        assert_eq!(e.preview_mesh_mut().unwrap().positions, unpainted);
+        assert!(!e.can_undo());
+        assert!(e.can_redo());
+        e.redo();
+        assert_eq!(e.preview_mesh_mut().unwrap().positions, painted);
+
+        e.oxymorph.as_mut().unwrap().set_brush(Some(MixBrush::Erase));
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        assert_ne!(e.preview_mesh_mut().unwrap().positions, painted);
+        e.cancel_drag();
+        assert_eq!(e.preview_mesh_mut().unwrap().positions, painted);
+        assert_eq!(e.scene.get(a).unwrap().mesh.positions, original);
+        assert_eq!(e.scene.get(b).unwrap().mesh.positions, shifted);
+        assert_eq!(e.history.revision(), revision);
     }
 
     /// An editor with the bundled in-app plugins loaded from a temporary
