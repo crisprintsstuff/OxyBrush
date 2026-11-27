@@ -11,6 +11,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 
+- **Rebuild lower level** ([#611](https://github.com/crisprintsstuff/OxyBrush/issues/611)). Repeat recovery beneath the lowest subdivision level of a compatible closed quad mesh while keeping the current view and finer detail.
 - **OxyRemesh.** Open surfaces can use isoline extraction from fitted orientation-field charts when the charts are unfolded and cover enough of the surface.
 
 ### Fixed

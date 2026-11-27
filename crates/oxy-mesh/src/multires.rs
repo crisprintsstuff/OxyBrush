@@ -36,6 +36,8 @@
 //! between mesh order and level order with [`Mesh::source_vertices`] /
 //! [`Mesh::source_triangles`].
 
+pub(crate) mod rebuild;
+
 use crate::retopo::Cage;
 use crate::{Mesh, MeshData};
 use glam::{Vec2, Vec3};
@@ -1033,7 +1035,7 @@ impl Multires {
         while self.active > target {
             let fine = attrs.color.clone();
             attrs = self.attributes_down(self.active, attrs);
-            self.keep_paint(self.active, &fine, &attrs);
+            self.keep_paint(self.active, &fine, &attrs.color);
             self.active -= 1;
         }
         self.clamp_active_paint(&mut attrs.color);
@@ -1130,15 +1132,15 @@ impl Multires {
 
     /// Remember what level `k`'s colors `fine` have beyond carrying the
     /// level below (`coarse`, just carried down) back up.
-    fn keep_paint(&mut self, k: usize, fine: &[Vec3], coarse: &Attributes) {
-        let paint = if fine.is_empty() || coarse.color.is_empty() {
+    fn keep_paint(&mut self, k: usize, fine: &[Vec3], coarse: &[Vec3]) {
+        let paint = if fine.is_empty() || coarse.is_empty() {
             Vec::new()
         } else {
-            let up = self.attributes_up_carried(k, coarse.clone());
-            if up.color.len() != fine.len() {
+            let up = self.refine_colors(k, coarse.to_vec());
+            if up.len() != fine.len() {
                 Vec::new()
             } else {
-                let diff: Vec<Vec3> = fine.iter().zip(&up.color).map(|(f, u)| *f - *u).collect();
+                let diff: Vec<Vec3> = fine.iter().zip(up).map(|(f, u)| *f - u).collect();
                 if diff.iter().all(|d| d.abs().max_element() < 1e-6) { Vec::new() } else { diff }
             }
         };

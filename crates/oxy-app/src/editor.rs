@@ -1136,6 +1136,15 @@ pub enum JobResult {
         previous: Option<oxy_mesh::multires::Multires>,
         strokes: Option<(u64, u64, crate::living::LevelStrokeRecords)>,
     },
+    /// A recovered coarse level, ready to install if the source still matches.
+    RebuiltLower {
+        mesh: Mesh,
+        multires: oxy_mesh::multires::Multires,
+        revision: u64,
+        source_topology: u64,
+        source_edits: u64,
+        source_faces: u64,
+    },
     /// A lightened piece shown at its own level again (no undo step).
     Relevel {
         mesh: Mesh,
@@ -8125,17 +8134,17 @@ impl Editor {
         let Some(piece) = self.scene.try_active() else {
             return false;
         };
-        if piece.multires.as_ref().is_some_and(|m| m.is_bound_to(&piece.mesh)) {
+        if !piece.mesh.uvs().is_empty() {
             return false;
         }
-        if !piece.mesh.uvs().is_empty() || piece.mesh.is_painted() {
-            return false;
+        if let Some(stack) = piece.multires.as_ref().filter(|m| m.is_bound_to(&piece.mesh)) {
+            return stack.can_rebuild_lower_level();
         }
         let (q, t) = piece.mesh.quad_and_triangle_counts();
         t == 0 && q > 0
     }
 
-    /// Recover one Catmull–Clark coarse level under the active piece
+    /// Recover one Catmull–Clark coarse level beneath the piece's lowest level
     /// ([RFC 0036](../../../docs/rfcs/0036-rebuild-lower-subdivision-level.md)).
     pub fn rebuild_lower_level(&mut self) {
         if !self.need_piece() {
@@ -8145,42 +8154,60 @@ impl Editor {
             self.status = "Another operation is still running".into();
             return;
         }
-        {
-            let piece = self.scene.active();
-            if piece.multires.as_ref().is_some_and(|m| m.is_bound_to(&piece.mesh)) {
-                self.status = oxy_mesh::unsubdivide::RebuildError::HasLevels.message().into();
-                return;
-            }
-        }
         self.pointer_up();
-        let mesh = self.scene.active().mesh.clone();
-        let tris = mesh.triangle_count();
-        let background = tris > self.level_job_triangles;
-        let label = "Rebuild lower level".to_string();
-        if background {
-            self.start_job(label, Vec::new(), move || {
-                let (out, mr) =
-                    oxy_mesh::unsubdivide::rebuild_lower_level(&mesh).map_err(|e| e.message().to_string())?;
-                Ok(JobResult::Levels { mesh: out, multires: Some(mr), previous: None, strokes: None })
-            });
-            if let Some(job) = &mut self.job {
-                job.holds_levels = true;
-            }
+        self.living_end_drag();
+        if self.subdivision_would_bake_strokes() {
             return;
         }
-        match oxy_mesh::unsubdivide::rebuild_lower_level(&mesh) {
-            Ok((out, mr)) => {
-                let piece = self.scene.active_mut();
-                let id = piece.id;
-                let prev = std::mem::replace(&mut piece.mesh, out);
-                let prev_levels = piece.multires.take();
-                piece.multires = Some(mr);
-                self.history.record_topology(&label, id, prev, prev_levels);
-                let (a, c) = self.multires_level().unwrap_or((0, 0));
-                self.status = format!("{label}: level {} of {c}, {} triangles", a + 1, tris);
-            }
-            Err(e) => self.status = e.message().into(),
+        let piece = self.scene.active();
+        let stack = piece.multires.as_ref().filter(|m| m.is_bound_to(&piece.mesh));
+        if stack.is_none()
+            && piece.cage.as_ref().is_some_and(|cage| !cage.creases.is_empty())
+            && piece.current_cage().is_some()
+        {
+            self.status = oxy_mesh::unsubdivide::RebuildError::UnsupportedAttributes.message().into();
+            return;
         }
+        let largest = stack.map_or(piece.mesh.triangle_count(), |m| m.triangle_count(m.level_count() - 1));
+        let stack = stack.cloned();
+        let work = move |mesh: &Mesh| match stack {
+            Some(stack) => stack.rebuild_lower_level(mesh),
+            None => oxy_mesh::unsubdivide::rebuild_lower_level(mesh),
+        };
+        let label = "Rebuild lower level";
+        if largest > self.level_job_triangles {
+            let mesh = piece.mesh.clone();
+            let revision = self.history.revision();
+            self.start_job(label.into(), Vec::new(), move || {
+                let (source_topology, source_edits, source_faces) =
+                    (mesh.topology_version(), mesh.edit_version(), mesh.face_version());
+                let (mesh, multires) = work(&mesh).map_err(|e| e.message().to_string())?;
+                Ok(JobResult::RebuiltLower { mesh, multires, revision, source_topology, source_edits, source_faces })
+            });
+            return;
+        }
+        self.status = match work(&piece.mesh) {
+            Ok((mesh, multires)) => {
+                let index = self.scene.active_index();
+                Self::install_rebuilt_lower(self.active_doc_mut(), index, label, mesh, multires)
+            }
+            Err(e) => e.message().into(),
+        };
+    }
+
+    fn install_rebuilt_lower(
+        doc: &mut Document,
+        index: usize,
+        label: &str,
+        mesh: Mesh,
+        multires: oxy_mesh::multires::Multires,
+    ) -> String {
+        let piece = &mut doc.scene.pieces[index];
+        let (active, count, triangles) = (multires.active() + 1, multires.level_count(), mesh.triangle_count());
+        let prev_mesh = std::mem::replace(&mut piece.mesh, mesh);
+        let prev_levels = piece.multires.replace(multires);
+        doc.history.record_topology(label, piece.id, prev_mesh, prev_levels);
+        format!("{label}: level {active} of {count}, {triangles} triangles")
     }
 
     /// Subdivide the active piece once, as a plain mesh (no levels), with
@@ -9082,6 +9109,22 @@ impl Editor {
                 piece.mesh = mesh;
                 piece.multires = Some(multires);
                 format!("{} ({secs:.1} s)", job.label)
+            }
+            Ok(JobResult::RebuiltLower { mesh, multires, revision, source_topology, source_edits, source_faces }) => {
+                let doc = &mut self.documents[doc_idx];
+                let Some(index) = doc.scene.index_of(job.target) else {
+                    return format!("{}: the piece was deleted meanwhile", job.label);
+                };
+                let source = &doc.scene.pieces[index].mesh;
+                if revision != doc.history.revision()
+                    || source_topology != source.topology_version()
+                    || source_edits != source.edit_version()
+                    || source_faces != source.face_version()
+                {
+                    return "Rebuild cancelled because the project was edited while it was running".into();
+                }
+                let status = Self::install_rebuilt_lower(doc, index, &job.label, mesh, multires);
+                format!("{status} in {secs:.1} s")
             }
             Ok(JobResult::Levels { mesh, multires, previous, strokes }) => {
                 let doc = &mut self.documents[doc_idx];
@@ -15640,17 +15683,46 @@ mod tests {
         e.scene = Scene::new(Piece::new("Box", mesh));
         e.subdivision_scheme = oxy_mesh::multires::Scheme::CatmullClark;
         e.add_level();
-        wait_job(&mut e);
-        assert_eq!(e.multires_level(), Some((1, 2)));
+        e.add_level();
+        assert_eq!(e.multires_level(), Some((2, 3)));
         e.keep_level_only();
-        wait_job(&mut e);
         assert!(e.multires_level().is_none());
         assert!(e.can_rebuild_lower_level());
+        let mut fine = e.scene.active().mesh.positions.clone();
+        fine.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).then(a.z.total_cmp(&b.z)));
+        e.rebuild_lower_level();
+        assert_eq!(e.multires_level(), Some((1, 2)), "{}", e.status);
+        e.step_level(-1);
+        assert_eq!(e.multires_level(), Some((0, 2)));
+
+        // The denser hidden level determines whether recovery needs a worker.
+        e.level_job_triangles = 100;
+        assert!(e.can_rebuild_lower_level());
+        e.rebuild_lower_level();
+        assert!(e.job.is_some());
+        assert_eq!(e.multires_level(), Some((0, 2)));
+        wait_job(&mut e);
+        assert_eq!(e.multires_level(), Some((1, 3)), "{}", e.status);
         e.rebuild_lower_level();
         wait_job(&mut e);
-        assert_eq!(e.multires_level(), Some((1, 2)));
+        assert_eq!(e.multires_level(), Some((1, 3)));
+        assert!(e.status.contains("connectivity"), "{}", e.status);
         e.undo();
-        assert!(e.multires_level().is_none());
+        assert_eq!(e.multires_level(), Some((0, 2)));
+        e.redo();
+        assert_eq!(e.multires_level(), Some((1, 3)));
+
+        let dir = std::env::temp_dir().join(format!("oxy-rebuild-levels-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(e.save(&dir.join("levels")));
+        let mut reopened = editor();
+        reopened.open(&dir.join("levels.oxb"));
+        assert_eq!(reopened.multires_level(), Some((1, 3)), "{}", reopened.status);
+        reopened.step_level(1);
+        let mut actual = reopened.scene.active().mesh.positions.clone();
+        actual.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).then(a.z.total_cmp(&b.z)));
+        assert_eq!(actual, fine);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
