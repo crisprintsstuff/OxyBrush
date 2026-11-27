@@ -93,8 +93,32 @@ issue request or comparing features (same rule as ZBrush format mentions).
 | **4** | Autoremesher-standard path (MIT): isotropic resample (default on), dual-extract hole fill / non-manifold / short-edge cleanup + seal fallback, isoline quad extract (gated until coverage is good), global UV/frame parameterization (pure-Rust MIQP, no Eigen — still open). Refuse open surfaces on closed inputs when seal cannot close. |
 
 The isoline extractor accepts per-corner UVs and splits each isoline at
-interior integer crossings before welding the graph. The current field still
-supplies shared vertex UVs. A seam-consistent global parameterization and
+interior integer crossings before welding the graph. For independent charts,
+both endpoints of every shared edge must agree under a single quarter turn
+and integer translation. That gives future solvers an extraction contract
+to test on open and closed fixtures. The first field fit combs equivalent
+quarter turns along the vertex graph. It rejects any edge that still needs a
+different quarter turn after combing and relaxes a least-squares fit of UV
+edge differences. Triangle charts use integer offsets of those shared
+coordinates. Open inputs can use the fitted charts when they are unfolded and pass the
+face-count and boundary checks. Closed inputs still use the existing lattice
+and dual-extraction paths. Cutting at field
+singularities, solving for independent chart transitions, and measuring
+coverage on curved sculpts remain open.
+
+The cut-topology builder splits triangle corner fans at designated interior
+edges and pairs the resulting UV endpoints by source vertex. This gives the
+next solver separate variables on either side of a cut without changing the
+sculpt mesh. The preparation stage seeds these cuts from residual quarter turns on
+interior edges after combing. A spanning forest of the remaining face adjacencies keeps each chart a
+disk. This can add more cuts than a shortest-cut method. A seam fit now enforces supplied integer translations and quarter turns
+on the cut vertices. It projects an initial UV estimate onto the shared
+constraints and rejects inconsistent cycles. An automatic first pass now chooses the quarter turn and rounded offset
+with the least squared error at the two seam endpoints. The joint fit
+rejects incompatible choices. The cut mesh gets its initial coordinates from the orientation field. Fitted
+charts enter isoline extraction when seam constraints agree and the UVs
+are unfolded. Closed inputs require a boundary-free candidate. Existing
+extraction paths handle rejected candidates. Joint integer optimization and
 coverage on curved sculpts remain open.
 
 ## Verification

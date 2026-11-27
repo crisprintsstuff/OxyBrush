@@ -14,7 +14,7 @@
 //! Phase 3 adds orientation stroke constraints, singularity attractors,
 //! and adaptivity / anisotropy knobs (paper §3.7).
 
-use glam::Vec3;
+use glam::{Quat, Vec2, Vec3};
 use oxy_mesh::{Mesh, MeshData, WHITE};
 use std::collections::{HashMap, HashSet};
 
@@ -206,7 +206,7 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
         smooth_position(&graph, &o, &mut p, rho, opts.extrinsic, adaptivity, anisotropy);
     }
 
-    let extracted = extract_with_isoline(mesh, &graph, &o, &p, rho)?;
+    let extracted = extract_with_isoline(mesh, &graph, &o, &p, rho, input_watertight)?;
     if extracted.faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
@@ -315,6 +315,172 @@ fn boundary_edge_count(m: &Mesh) -> usize {
 }
 
 /// Lattice UVs for isoline extract: BFS accumulating Instant Meshes integer jumps.
+struct CombedField {
+    normals: Vec<Vec3>,
+    frames: Vec<Vec3>,
+    neighbors: Vec<Vec<u32>>,
+    /// Parents precede children. Each component root has no parent.
+    traversal: Vec<(usize, Option<usize>)>,
+}
+
+impl CombedField {
+    fn residual_edges(&self) -> impl Iterator<Item = [u32; 2]> + '_ {
+        self.neighbors.iter().enumerate().flat_map(move |(i, row)| {
+            row.iter().map(|&j| j as usize).filter(move |&j| i < j).filter_map(move |j| {
+                let transported = Quat::from_rotation_arc(self.normals[i], self.normals[j]) * self.frames[i];
+                let current = transported.dot(self.frames[j]);
+                let perpendicular = transported.dot(self.normals[j].cross(self.frames[j]));
+                // At a tie either representative is valid.
+                (current.abs().max(perpendicular.abs()) > current + 1e-5).then_some([i as u32, j as u32])
+            })
+        })
+    }
+}
+
+fn comb_field(normals: &[Vec3], orientations: &[Vec3], mut neighbors: Vec<Vec<u32>>) -> CombedField {
+    let normals: Vec<_> = normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
+    let mut frames: Vec<_> = normals
+        .iter()
+        .zip(orientations)
+        .map(|(&normal, &orientation)| project_tangent(orientation, normal).normalize_or(tangent_basis(normal).0))
+        .collect();
+    neighbors.iter_mut().for_each(|row| row.sort_unstable());
+    let mut seen = vec![false; normals.len()];
+    let mut traversal = Vec::with_capacity(normals.len());
+    let mut queue = std::collections::VecDeque::new();
+    for root in 0..normals.len() {
+        if seen[root] {
+            continue;
+        }
+        seen[root] = true;
+        traversal.push((root, None));
+        queue.push_back(root);
+        while let Some(i) = queue.pop_front() {
+            for &j in &neighbors[i] {
+                let j = j as usize;
+                if seen[j] {
+                    continue;
+                }
+                let transported = Quat::from_rotation_arc(normals[i], normals[j]) * frames[i];
+                frames[j] = best_rosy_match(frames[j], normals[j], transported);
+                traversal.push((j, Some(i)));
+                seen[j] = true;
+                queue.push_back(j);
+            }
+        }
+    }
+
+    CombedField { normals, frames, neighbors, traversal }
+}
+
+/// Prepare solver topology from a per-vertex orientation field. Residual
+/// quarter turns on interior edges seed the cuts. A spanning forest of the
+/// remaining face adjacencies joins the triangles into disk charts.
+pub fn prepare_uv_cuts(
+    mesh: &Mesh,
+    orientations: &[Vec3],
+    sharp_angle_deg: f32,
+) -> Option<crate::uv_cut::UvCutTopology> {
+    if orientations.len() != mesh.vertex_count() || orientations.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    let graph = Graph::from_mesh(mesh, sharp_angle_deg);
+    prepare_cuts(&mesh.triangles, &comb_field(&graph.normals, orientations, graph.neighbors))
+}
+
+fn prepare_cuts(triangles: &[[u32; 3]], field: &CombedField) -> Option<crate::uv_cut::UvCutTopology> {
+    let residual: HashSet<_> = field.residual_edges().collect();
+    let mut seen = HashSet::with_capacity(residual.len());
+    let mut seams = Vec::with_capacity(residual.len());
+    for &[a, b, c] in triangles {
+        for [a, b] in [[a, b], [b, c], [c, a]] {
+            let edge = [a.min(b), a.max(b)];
+            if residual.contains(&edge) && !seen.insert(edge) {
+                seams.push(edge);
+            }
+        }
+    }
+    crate::uv_cut::UvCutTopology::complete(triangles, &seams)
+}
+
+/// Fit UV differences on each connected component. Residual quarter turns
+/// require a seam that this continuous fit cannot represent.
+fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Option<Vec<[Vec2; 3]>> {
+    let field = comb_field(&g.normals, orientations, g.neighbors.clone());
+    if field.residual_edges().next().is_some() {
+        return None;
+    }
+    let uv = fit_field_coordinates(&g.positions, field, rho);
+    Some(triangles.iter().map(|t| rebase_chart(t.map(|v| uv[v as usize]))).collect())
+}
+
+fn rebase_chart(chart: [Vec2; 3]) -> [Vec2; 3] {
+    let offset = chart[0].floor();
+    chart.map(|uv| uv - offset)
+}
+
+fn fit_field_coordinates(positions: &[Vec3], field: CombedField, rho: f32) -> Vec<Vec2> {
+    let CombedField { normals, frames, neighbors, traversal } = field;
+    let edge_step = |i: usize, j: usize| {
+        let edge = (positions[j] - positions[i]) / rho;
+        let along = (frames[i] + frames[j]) * 0.5;
+        let across = (normals[i].cross(frames[i]) + normals[j].cross(frames[j])) * 0.5;
+        Vec2::new(edge.dot(along), edge.dot(across))
+    };
+    let mut coordinates = vec![Vec2::ZERO; positions.len()];
+    let mut anchored = vec![false; positions.len()];
+    for (i, parent) in traversal {
+        if let Some(j) = parent {
+            coordinates[i] = coordinates[j] + edge_step(j, i);
+        } else {
+            anchored[i] = true;
+        }
+    }
+
+    // The normal equation for each free vertex is the average of its
+    // neighbors minus the field's desired outgoing edge differences.
+    let bias: Vec<Vec2> =
+        neighbors.iter().enumerate().map(|(i, row)| row.iter().map(|&j| edge_step(i, j as usize)).sum()).collect();
+    for _ in 0..24 {
+        for (i, row) in neighbors.iter().enumerate() {
+            if anchored[i] {
+                continue;
+            }
+            let sum: Vec2 = row.iter().map(|&j| coordinates[j as usize]).sum();
+            coordinates[i] = (sum - bias[i]) / row.len() as f32;
+        }
+    }
+
+    coordinates
+}
+
+fn fit_cut_charts(
+    cut: &crate::uv_cut::UvCutTopology,
+    graph: &Graph,
+    orientations: &[Vec3],
+    rho: f32,
+) -> Option<Vec<[Vec2; 3]>> {
+    let gather = |values: &[Vec3]| -> Vec<Vec3> { cut.source_vertices.iter().map(|&v| values[v as usize]).collect() };
+    let positions = gather(&graph.positions);
+    let normals = gather(&graph.normals);
+    let orientations = gather(orientations);
+    let mut neighbors = vec![Vec::new(); positions.len()];
+    for &[a, b, c] in &cut.triangles {
+        for [a, b] in [[a, b], [b, c], [c, a]] {
+            neighbors[a].push(u32::try_from(b).ok()?);
+            neighbors[b].push(u32::try_from(a).ok()?);
+        }
+    }
+    for row in &mut neighbors {
+        row.sort_unstable();
+        row.dedup();
+    }
+    let field = comb_field(&normals, &orientations, neighbors);
+    let initial = fit_field_coordinates(&positions, field, rho);
+    let fitted = cut.fit_automatic_seam_uvs(&initial)?;
+    Some(cut.triangles.iter().map(|t| rebase_chart(t.map(|v| fitted[v]))).collect())
+}
+
 fn build_field_uvs(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Vec<glam::Vec2> {
     use glam::Vec2;
     let n = g.len();
@@ -352,11 +518,41 @@ fn extract_with_isoline(
     o: &[Vec3],
     p: &[Vec3],
     rho: f32,
+    input_watertight: bool,
 ) -> Result<Extracted, AutoRetopoError> {
     // Isoline extract is still WIP: only accept near face-budget coverage.
     let area = surface_area(mesh).max(1e-8);
     let face_budget = (area / (rho * rho)).round().max(64.0) as usize;
     let min_faces = (face_budget / 2).max(256);
+    // A single continuous chart cannot cover a closed surface without
+    // folds. Until we cut at singularities, only try the fit on open inputs.
+    if !input_watertight && let Some(charts) = fit_field_charts(graph, o, &mesh.triangles, rho) {
+        let unfolded = charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 1e-6);
+        if unfolded
+            && let Some(iso) =
+                crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, rho)
+            && iso.faces.len() >= min_faces
+            && polygon_boundary_edges(&iso.faces) < iso.faces.len() / 2
+        {
+            return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        }
+    }
+    let field = comb_field(&graph.normals, o, graph.neighbors.clone());
+    if let Some(cut) = prepare_cuts(&mesh.triangles, &field)
+        && !cut.seams.is_empty()
+        && let Some(charts) = fit_cut_charts(&cut, graph, o, rho)
+        && charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 1e-6)
+        && let Some(iso) =
+            crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, rho)
+        && iso.faces.len() >= min_faces
+    {
+        let counts = polygon_edge_counts(&iso.faces);
+        let boundary = counts.values().filter(|&&count| count == 1).count();
+        let boundary_ok = if input_watertight { boundary == 0 } else { boundary < iso.faces.len() / 2 };
+        if boundary_ok && counts.values().all(|&count| count <= 2) {
+            return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        }
+    }
     let field_uvs = build_field_uvs(graph, o, p, rho);
     if let Some(iso) = crate::isoline_extract::extract_isoline_mesh(&graph.positions, &mesh.triangles, &field_uvs, rho)
     {
@@ -369,7 +565,11 @@ fn extract_with_isoline(
 }
 
 fn polygon_boundary_edges(faces: &[Vec<u32>]) -> usize {
-    let mut he: HashMap<(u32, u32), i32> = HashMap::new();
+    polygon_edge_counts(faces).values().filter(|&&count| count == 1).count()
+}
+
+fn polygon_edge_counts(faces: &[Vec<u32>]) -> HashMap<(u32, u32), usize> {
+    let mut he: HashMap<(u32, u32), usize> = HashMap::new();
     for f in faces {
         let n = f.len();
         for i in 0..n {
@@ -379,7 +579,7 @@ fn polygon_boundary_edges(faces: &[Vec<u32>]) -> usize {
             *he.entry(key).or_default() += 1;
         }
     }
-    he.values().filter(|&&c| c == 1).count()
+    he
 }
 
 /// Component count and triangle counts per root (descending).
@@ -1677,6 +1877,78 @@ fn polygons_to_quad_dominant(ex: &Extracted) -> Result<(MeshData, HashSet<[u32; 
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+
+    #[test]
+    fn fitted_charts_integrate_equivalent_quarter_turns_on_a_plane() {
+        let mesh = primitives::plane(4, 4.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let orientations: Vec<_> =
+            graph.normals.iter().enumerate().map(|(i, &normal)| rosy(Vec3::X, normal, i % SO)).collect();
+        let charts = fit_field_charts(&graph, &orientations, &mesh.triangles, 0.5).expect("consistent frames");
+        for (&triangle, chart) in mesh.triangles.iter().zip(&charts) {
+            for i in 1..3 {
+                let edge = graph.positions[triangle[i] as usize] - graph.positions[triangle[0] as usize];
+                assert!(((chart[i] - chart[0]).length() - edge.length() * 2.0).abs() < 1e-4);
+            }
+        }
+        let out = crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, 0.5)
+            .expect("field charts must connect across the triangle seams");
+        assert!(out.faces.iter().any(|face| face.len() == 4));
+    }
+
+    #[test]
+    fn fitted_charts_reject_a_loop_with_quarter_turn_mismatch() {
+        let mesh = Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]]);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        // Each edge prefers a 30-degree change, but following all three
+        // changes around the triangle accumulates a quarter turn.
+        let orientations: Vec<_> =
+            (0..3).map(|i| rot_about(Vec3::Z, i as f32 * std::f32::consts::FRAC_PI_6, Vec3::X)).collect();
+        assert!(fit_field_charts(&graph, &orientations, &mesh.triangles, 1.0).is_none());
+    }
+
+    #[test]
+    fn orientation_discontinuity_splits_the_shared_diagonal() {
+        let mesh = Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X + Vec3::Y], vec![[0, 1, 2], [2, 1, 3]]);
+        let orientations: Vec<_> = mesh
+            .positions
+            .iter()
+            .map(|p| rot_about(Vec3::Z, (p.x - p.y) * std::f32::consts::FRAC_PI_6, Vec3::X))
+            .collect();
+        let cut = prepare_uv_cuts(&mesh, &orientations, 40.0).unwrap();
+        assert_eq!(cut.seams.len(), 1);
+        assert_eq!(cut.source_vertices.len(), 6);
+        let [first, second] = cut.seams[0];
+        assert_ne!(first, second);
+        assert_eq!(first.map(|i| cut.source_vertices[i]), second.map(|i| cut.source_vertices[i]));
+        assert_eq!(
+            first.map(|i| mesh.positions[cut.source_vertices[i] as usize]).into_iter().sum::<Vec3>(),
+            Vec3::X + Vec3::Y
+        );
+    }
+
+    #[test]
+    fn fitted_cut_charts_extract_on_both_sides_of_a_diagonal() {
+        let mesh = primitives::plane(1, 16.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let diagonal: Vec<_> = mesh.triangles[0].into_iter().filter(|v| mesh.triangles[1].contains(v)).collect();
+        let cut = crate::uv_cut::UvCutTopology::from_seams(&mesh.triangles, &[[diagonal[0], diagonal[1]]]).unwrap();
+        let charts = fit_cut_charts(&cut, &graph, &vec![Vec3::X; graph.len()], 1.0).unwrap();
+        assert!(charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 0.0));
+        let out = crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, 1.0)
+            .expect("aligned charts must pass seam validation");
+        assert!(out.faces.len() > 128, "extract must cover both halves");
+    }
+
+    #[test]
+    fn open_plane_can_reach_the_isoline_coverage_gate_from_two_triangles() {
+        let mesh = primitives::plane(1, 32.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let orientations = vec![Vec3::X; graph.len()];
+        let out = extract_with_isoline(&mesh, &graph, &orientations, &graph.positions, 1.0, false)
+            .expect("fitted charts should supply the grid on a sparse plane");
+        assert!(out.faces.len() >= 512, "got {} faces", out.faces.len());
+    }
 
     #[test]
     fn auto_retopo_sphere_is_one_connected_piece() {
