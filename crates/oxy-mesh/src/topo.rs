@@ -4,6 +4,9 @@ use crate::Mesh;
 use glam::Vec3;
 use std::collections::HashMap;
 
+mod import_repair;
+pub use import_repair::{ImportRepair, ImportRepairAction, repair_import};
+
 /// Split every triangle into four at edge midpoints. Shared edges share midpoints.
 pub fn midpoint_subdivide(positions: &[Vec3], tris: &[[u32; 3]]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let mut pos = positions.to_vec();
@@ -698,8 +701,7 @@ fn inspect_surface(mesh: &Mesh, inspect_faces: bool) -> ImportTopologyReport {
             }
             if inspect_faces && vertex < next.min(prev) {
                 faces.push([next.min(prev), next.max(prev)]);
-                let [a, b, c] = triangle.map(|v| mesh.positions[v as usize].as_dvec3());
-                if (b - a).cross(c - a) == glam::DVec3::ZERO {
+                if zero_area(&mesh.positions, triangle) {
                     report.zero_area_triangles += 1;
                 }
             }
@@ -720,6 +722,11 @@ fn inspect_surface(mesh: &Mesh, inspect_faces: bool) -> ImportTopologyReport {
         && topology.non_manifold_edge_count == 0
         && topology.degenerate_triangle_count == 0;
     report
+}
+
+fn zero_area(positions: &[Vec3], triangle: [u32; 3]) -> bool {
+    let [a, b, c] = triangle.map(|v| positions[v as usize].as_dvec3());
+    (b - a).cross(c - a) == glam::DVec3::ZERO
 }
 
 /// Helper to verify if two triangles sharing edge `(u, v)` form a valid convex quad.
@@ -1014,15 +1021,18 @@ pub fn boundary_loops(triangles: &[[u32; 3]]) -> Vec<Vec<u32>> {
 /// and triangles are appended.
 pub fn close_holes(data: &mut crate::MeshData) -> usize {
     let loops = boundary_loops(&data.triangles);
+    fill_boundary_loops(data, &loops);
+    loops.len()
+}
+
+fn fill_boundary_loops(data: &mut crate::MeshData, loops: &[Vec<u32>]) {
     let first_group = data.groups.iter().copied().max().map_or(1, |g| g + 1);
     let has_color = !data.color.is_empty();
-    for (group, lp) in (first_group..).zip(&loops) {
+    for (group, lp) in (first_group..).zip(loops) {
         let n = lp.len();
         let pts: Vec<Vec3> = lp.iter().map(|&v| data.positions[v as usize]).collect();
         let center = pts.iter().copied().sum::<Vec3>() / n as f32;
-        let edge = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.distance(*b)).sum::<f32>() / n as f32;
-        let radius = pts.iter().map(|p| p.distance(center)).sum::<f32>() / n as f32;
-        let rings = ((radius / edge.max(1e-9)).round() as usize).clamp(1, 64);
+        let rings = hole_patch_rings(&pts, center);
         let color =
             if has_color { lp.iter().map(|&v| data.color[v as usize]).sum::<Vec3>() / n as f32 } else { Vec3::ONE };
         let first_new = data.positions.len() as u32;
@@ -1083,7 +1093,13 @@ pub fn close_holes(data: &mut crate::MeshData) -> usize {
         }
         data.triangles.extend(new_tris);
     }
-    loops.len()
+}
+
+fn hole_patch_rings(points: &[Vec3], center: Vec3) -> usize {
+    let n = points.len() as f32;
+    let edge = points.iter().zip(points.iter().cycle().skip(1)).map(|(a, b)| a.distance(*b)).sum::<f32>() / n;
+    let radius = points.iter().map(|p| p.distance(center)).sum::<f32>() / n;
+    ((radius / edge.max(1e-9)).round() as usize).clamp(1, 64)
 }
 
 /// Make a mesh symmetric across the plane `position[axis] == center`:

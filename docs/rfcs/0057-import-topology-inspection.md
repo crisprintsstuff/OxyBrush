@@ -27,8 +27,22 @@ Structural file errors still use the import errors from the format reader.
 
 Self-intersections, disconnected vertex fans, and solid printability require
 additional checks. This first pass diagnoses indexed edges and triangles.
-Automatic repair and different choices of weld tolerance are separate
-decisions.
+
+## Repair
+
+**Repair faces** removes duplicate indexed faces and exact zero-area triangles,
+then makes winding consistent where the surface permits it. Preserve the
+majority orientation of each connected region and leave contradictory
+regions and ambiguous non-manifold joins for manual work. Preserve surviving
+vertex and face attributes, including UV corner order on reversed faces.
+
+**Close holes** is a separate action because open boundaries can be intentional.
+It fills simple boundary loops on a surface with consistent winding and no
+other reported face or edge defects. Flat sheets are left open because a cap
+would overlap the sheet. Both actions run on the worker, validate
+the result, keep one Undo step, and update the report. If a piece changes while
+the worker runs, discard the result. Preserve the report when Undo swaps the
+old mesh back.
 
 ## Acceptance criteria
 

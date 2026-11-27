@@ -1119,7 +1119,25 @@ pub(crate) struct ImportFinding {
     /// The fit-to-scene undo step swaps the original and scaled pieces.
     original: u64,
     fitted: u64,
-    report: oxy_mesh::topo::ImportTopologyReport,
+    report: topo::ImportTopologyReport,
+    /// Results follow the mesh across topology Undo and Redo.
+    repaired: Vec<(u64, topo::ImportTopologyReport)>,
+}
+
+impl ImportFinding {
+    fn matches(&self, piece: u64) -> bool {
+        self.original == piece || self.fitted == piece
+    }
+}
+
+pub struct ImportRepairResult {
+    piece: u64,
+    source: [u64; 3],
+    repair: topo::ImportRepair,
+}
+
+fn repair_source(mesh: &Mesh) -> [u64; 3] {
+    [mesh.topology_version(), mesh.edit_version(), mesh.face_version()]
 }
 
 /// The outcome of reading a batch of mesh files. Failures are skipped;
@@ -1189,6 +1207,8 @@ pub enum JobResult {
     },
     /// Files read for Import, applied on the UI thread as new pieces.
     Imported(ImportRead),
+    /// An import repair and the report for its candidate geometry.
+    ImportRepair(Box<ImportRepairResult>),
     /// An OxySpheres mesh (RFC 0034), to add as a new piece, with the
     /// OxySpheres piece `spheres` that made it, in place of the piece
     /// `replace` (or added).
@@ -6387,7 +6407,12 @@ impl Editor {
         }
         self.import_findings = findings
             .into_iter()
-            .map(|(index, original, report)| ImportFinding { original, fitted: self.scene.pieces[index].id, report })
+            .map(|(index, original, report)| ImportFinding {
+                original,
+                fitted: self.scene.pieces[index].id,
+                report,
+                repaired: Vec::new(),
+            })
             .collect();
         let bounds = self.scene.bounds();
         self.camera.frame(bounds);
@@ -6405,8 +6430,38 @@ impl Editor {
     ) -> impl Iterator<Item = (usize, &Piece, &oxy_mesh::topo::ImportTopologyReport)> {
         self.import_findings.iter().filter_map(|finding| {
             let index = self.scene.index_of(finding.fitted).or_else(|| self.scene.index_of(finding.original))?;
-            Some((index, &self.scene.pieces[index], &finding.report))
+            let piece = &self.scene.pieces[index];
+            let report = finding
+                .repaired
+                .iter()
+                .find(|(topology, _)| *topology == piece.mesh.topology_version())
+                .map_or(&finding.report, |(_, report)| report);
+            Some((index, piece, report))
         })
+    }
+
+    pub(crate) fn repair_import_piece(&mut self, id: u64, action: topo::ImportRepairAction) {
+        if self.documents.iter().any(|d| d.job.is_some()) {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        self.release_pointer();
+        let Some(piece) = self.scene.get(id) else { return };
+        if piece.multires.is_some() {
+            self.status = "Import repair requires a piece without subdivision levels".into();
+            return;
+        }
+        let mesh = piece.mesh.clone();
+        let source = repair_source(&mesh);
+        let limit = self.max_triangles;
+        let label = match action {
+            topo::ImportRepairAction::Faces => "Repair imported faces",
+            topo::ImportRepairAction::CloseHoles => "Close imported holes",
+        };
+        self.start_job(label.into(), Vec::new(), move || {
+            let repair = topo::repair_import(&mesh, action, limit).map_err(str::to_owned)?;
+            Ok(JobResult::ImportRepair(Box::new(ImportRepairResult { piece: id, source, repair })))
+        });
     }
 
     /// End a drag before the document changes. `pointer_up` tightens the
@@ -9510,6 +9565,26 @@ impl Editor {
                 doc.scene.set_active(target_index);
                 doc.history.record_compound(job.label.clone(), steps);
                 format!("{}: {tris} triangles in {secs:.1} s", job.label)
+            }
+            Ok(JobResult::ImportRepair(done)) => {
+                let ImportRepairResult { piece: id, source, repair } = *done;
+                let doc = &mut self.documents[doc_idx];
+                let Some(piece) = doc.scene.get_mut(id) else {
+                    return "Import repair cancelled because the piece was removed".into();
+                };
+                if repair_source(&piece.mesh) != source || piece.multires.is_some() {
+                    return "Import repair cancelled because the piece changed".into();
+                }
+                if let Some(mesh) = repair.mesh {
+                    let previous = std::mem::replace(&mut piece.mesh, mesh);
+                    doc.history.record_topology(&job.label, id, previous, None);
+                }
+                if let Some(finding) = doc.import_findings.iter_mut().find(|finding| finding.matches(id)) {
+                    let topology = piece.mesh.topology_version();
+                    finding.repaired.retain(|(version, _)| *version != topology);
+                    finding.repaired.push((topology, repair.report));
+                }
+                repair.summary
             }
             Ok(JobResult::Imported(read)) => {
                 if is_active {
@@ -17652,6 +17727,47 @@ mod tests {
         ed.replace_document(reloaded, None);
         assert!(snapshot(&ed).is_empty());
         assert!(!ed.show_import_inspection);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn import_repair_targets_its_row_and_updates_the_report_through_undo() {
+        let dir = import_dir("repair");
+        let path = dir.join("double.obj");
+        std::fs::write(&path, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\nf 3 2 1\n").unwrap();
+        let mut ed = editor();
+        ed.import(&path);
+        let (_, piece, initial) = ed.imported_topology_findings().next().unwrap();
+        let id = piece.id;
+        let initial = initial.clone();
+        assert_eq!(initial.duplicate_triangles, 1);
+
+        ed.scene.set_active(0);
+        let active = ed.scene.active().id;
+        ed.repair_import_piece(id, topo::ImportRepairAction::Faces);
+        assert!(ed.job.is_some());
+        wait_job(&mut ed);
+        assert_eq!(ed.scene.active().id, active);
+        let (_, piece, report) = ed.imported_topology_findings().next().unwrap();
+        assert_eq!(piece.mesh.triangle_count(), 1);
+        assert_eq!(report.duplicate_triangles, 0);
+        assert_eq!(report.topology.boundary_edge_count, 3);
+
+        ed.undo();
+        let (_, piece, report) = ed.imported_topology_findings().next().unwrap();
+        assert_eq!(piece.mesh.triangle_count(), 2);
+        assert_eq!(*report, initial);
+        ed.redo();
+        assert_eq!(ed.imported_topology_findings().next().unwrap().2.duplicate_triangles, 0);
+
+        ed.undo();
+        let revision = ed.history.revision();
+        ed.repair_import_piece(id, topo::ImportRepairAction::Faces);
+        ed.scene.get_mut(id).unwrap().mesh.mark_all_dirty();
+        wait_job(&mut ed);
+        assert!(ed.status.contains("piece changed"), "{}", ed.status);
+        assert_eq!(ed.history.revision(), revision);
+        assert_eq!(ed.scene.get(id).unwrap().mesh.triangle_count(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 

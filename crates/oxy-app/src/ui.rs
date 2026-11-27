@@ -1491,8 +1491,10 @@ fn import_inspection_dialog(ctx: &egui::Context, ed: &mut Editor) {
     }
     let mut open = true;
     let mut selected = None;
+    let mut repair = None;
+    let busy = ed.documents.iter().any(|doc| doc.job.is_some());
     egui::Window::new("Import inspection").open(&mut open).default_width(400.0).show(ctx, |ui| {
-        ui.label("Topology findings from the latest import. Open edges can be intentional on a sheet.");
+        ui.label("Findings from the latest import or repair. Open edges can be intentional on a sheet.");
         let mut findings = ed.imported_topology_findings().peekable();
         if findings.peek().is_none() {
             ui.weak("No imported pieces with findings in this scene.");
@@ -1514,8 +1516,44 @@ fn import_inspection_dialog(ctx: &egui::Context, ed: &mut Editor) {
                     ("Duplicate triangles", report.duplicate_triangles),
                     ("Degenerate triangles", report.topology.degenerate_triangle_count + report.zero_area_triangles),
                 ];
+                if !report.has_findings() {
+                    ui.label("No remaining edge or face findings.");
+                    continue;
+                }
                 for (label, count) in rows.into_iter().filter(|(_, count)| *count > 0) {
                     ui.label(format!("{label}  {count}"));
+                }
+                let face_findings = report.inconsistent_winding_edges > 0
+                    || report.duplicate_triangles > 0
+                    || report.zero_area_triangles > 0
+                    || report.topology.degenerate_triangle_count > 0;
+                let can_edit = !busy && piece.multires.is_none();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(can_edit && face_findings, egui::Button::new("Repair faces"))
+                        .on_hover_text("Remove duplicate and zero-area faces and make winding consistent")
+                        .clicked()
+                    {
+                        repair = Some((piece.id, oxy_mesh::topo::ImportRepairAction::Faces));
+                    }
+                    if ui
+                        .add_enabled(
+                            can_edit
+                                && report.topology.boundary_edge_count > 0
+                                && !face_findings
+                                && report.topology.non_manifold_edge_count == 0,
+                            egui::Button::new("Close holes"),
+                        )
+                        .on_hover_text("Fill open boundaries. Intentional openings will also be filled.")
+                        .clicked()
+                    {
+                        repair = Some((piece.id, oxy_mesh::topo::ImportRepairAction::CloseHoles));
+                    }
+                });
+                if piece.multires.is_some() {
+                    ui.weak("Import repairs are available on pieces without subdivision levels.");
+                } else if report.topology.non_manifold_edge_count > 0 {
+                    ui.weak("Remaining non-manifold joins need manual repair.");
                 }
             }
         });
@@ -1524,6 +1562,9 @@ fn import_inspection_dialog(ctx: &egui::Context, ed: &mut Editor) {
     if let Some(index) = selected {
         ed.scene.set_active(index);
         ed.frame_active();
+    }
+    if let Some((piece, action)) = repair {
+        ed.repair_import_piece(piece, action);
     }
 }
 
