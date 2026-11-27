@@ -7842,6 +7842,17 @@ impl Editor {
 
     /// Apply a change to the active piece's level stack, producing a new
     /// mesh, as one undoable step.
+    /// A topology change would make these stroke deltas uneditable.
+    fn subdivision_would_bake_strokes(&mut self) -> bool {
+        let piece = self.scene.active().id;
+        if self.living.strokes.iter().any(|stroke| stroke.piece == piece && stroke.listed()) {
+            self.status =
+                "Subdivision would bake editable strokes. Use Bake all in Strokes for this piece first.".into();
+            return true;
+        }
+        false
+    }
+
     fn multires_op(&mut self, label: &str, result_triangles: usize, change: LevelChange) {
         if !self.need_piece() {
             return;
@@ -7852,6 +7863,9 @@ impl Editor {
             return;
         }
         self.pointer_up();
+        if matches!(change, LevelChange::Add { .. } | LevelChange::Set(_)) && self.subdivision_would_bake_strokes() {
+            return;
+        }
         let background = result_triangles > self.level_job_triangles;
         let fresh = match &self.scene.active().multires {
             Some(m) if m.is_bound_to(&self.scene.active().mesh) => None,
@@ -8097,6 +8111,10 @@ impl Editor {
     /// stays exactly as it is.
     pub fn subdivide(&mut self, smooth: bool) {
         if !self.need_piece() {
+            return;
+        }
+        self.pointer_up();
+        if self.subdivision_would_bake_strokes() {
             return;
         }
         let quads = self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
@@ -8697,6 +8715,10 @@ impl Editor {
     /// Subdivide off the UI thread. The menu's [`subdivide`](Self::subdivide) stays instant for small meshes.
     pub fn subdivide_background(&mut self, smooth: bool) {
         if !self.need_piece() {
+            return;
+        }
+        self.pointer_up();
+        if self.subdivision_would_bake_strokes() {
             return;
         }
         let n = self.scene.active().mesh.triangle_count().saturating_mul(4);
@@ -18485,6 +18507,34 @@ mod tests {
         e.living.enabled = true;
         e.symmetry = Symmetry::default();
         e
+    }
+
+    #[test]
+    fn subdivision_does_not_silently_bake_editable_strokes() {
+        let mut e = with_living();
+        e.add_level();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        draw_curve(&mut e);
+        e.accept_curve();
+        assert!(!e.living.listed(e.scene.active().id).is_empty());
+        let before = e.scene.active().mesh.positions.clone();
+        let revision = e.history.revision();
+
+        e.step_level(-1);
+        e.add_level();
+        e.subdivide(false);
+        e.subdivide_background(false);
+        e.living_sync();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        assert_eq!(e.scene.active().mesh.positions, before);
+        assert_eq!(e.history.revision(), revision);
+        assert!(!e.living.listed(e.scene.active().id).is_empty());
+        assert!(e.job.is_none());
+        assert!(e.status.contains("Bake all"));
+
+        e.living_bake_active();
+        e.step_level(-1);
+        assert_eq!(e.multires_level(), Some((0, 2)));
     }
 
     /// The newest recipe, replayed on `base`, matches the piece now.
