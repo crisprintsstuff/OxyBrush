@@ -1,6 +1,6 @@
 # RFC 0052 — Also paint (sculpt + vertex color)
 
-- **Status:** Phase 1 implemented
+- **Status:** Also paint and independent RGB Strength implemented
 - **Builds on:** Paint brush, Color Jitter (#476), living-stroke recipes
 - **Name in UI:** **Also paint**. Do **not** use proprietary “RGB mode”
   product names (AGENTS.md trademarks).
@@ -15,8 +15,7 @@ only move. Switching brushes for every pass is slow for polypaint-style work.
 
 Add a per-brush **Also paint** checkbox on dab sculpt brushes that support
 it. When on, each dab moves the surface as usual **and** blends the current
-Paint color onto the same vertices (same falloff / strength / alpha as the
-sculpt). Alt still inverts the sculpt (Raise/Carve); erase color with the
+Paint color onto the same vertices with the sculpt dab’s falloff and alpha. Alt still inverts the sculpt (Raise/Carve); erase color with the
 Paint brush.
 
 ### Naming
@@ -38,10 +37,22 @@ Paint brush.
 - Stroke recipes version **9** (`also_paint:u8` after flags)
 - Undo snapshots color when Also paint is on; viewport shows vertex color
 
-### Out of scope for Phase 1
+### Independent RGB Strength
+
+When Also paint is on, **RGB Strength** sets color opacity independently
+of the sculpt strength. Enabling it for the first time starts from that
+brush's current strength. Pen pressure, falloff, alpha, mask and
+symmetry affect the dab as usual. Overlapping dabs in a stroke keep the
+strongest color blend at each vertex.
+
+Brush looks and exported presets store `rgb_strength`. Presets without
+it start from their saved sculpt strength. Stroke recipe version 10
+stores the independent value, and version 9 recipes replay with their
+original linked strength.
+
+### Out of scope
 
 - Grab / Kelvin / Scene Project / cutters
-- Separate paint strength from sculpt strength
 - Alt erase while Also paint is on
 
 ## Testing

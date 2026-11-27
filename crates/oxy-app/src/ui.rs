@@ -7069,6 +7069,19 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
                 {
                     ed.set_brush_also_paint(also);
                 }
+                if also {
+                    let mut rgb = ed.brush_rgb_strength(ed.brush_kind);
+                    ui.horizontal(|ui| {
+                        ui.label("RGB Strength");
+                        if ui
+                            .add(crate::widgets::Bar(egui::Slider::new(&mut rgb, 0.0..=1.0).max_decimals(2)))
+                            .on_hover_text("Set how opaque Also paint is, independently of how strongly the brush sculpts.")
+                            .changed()
+                        {
+                            ed.set_brush_rgb_strength(rgb);
+                        }
+                    });
+                }
             }
             if ed.brush_kind != BrushKind::PaintGroups {
                 tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);

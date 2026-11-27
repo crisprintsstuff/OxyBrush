@@ -73,8 +73,10 @@ pub enum NoRecipe {
     LivingOff,
     /// Dynamic detail was on, whether or not this stroke rebuilt the mesh.
     DynamicDetail,
-    /// Curve Move, Deform, or the gizmo: they aren't strokes.
+    /// A tool operation with no recorded brush inputs.
     WholePiece,
+    /// A gizmo transform recorded as vertex displacements.
+    Transform,
     /// A mirror copy, or one side of a stroke that was split.
     Copy,
 }
@@ -93,8 +95,9 @@ impl NoRecipe {
                 "This stroke was made with dynamic detail on, which changes the triangles under it, so its settings can't be edited. It can still be faded or deleted."
             }
             NoRecipe::WholePiece => {
-                "Curve Move, Deform and the gizmo change the whole piece, so they aren't strokes and their settings can't be edited here."
+                "Curve Move, Deform and gizmo operations that replace topology have no brush settings to edit here."
             }
+            NoRecipe::Transform => "Use the stroke or layer strength to fade this transform.",
             NoRecipe::Copy => {
                 "This is a mirrored copy, or one side of a stroke that was split, not the stroke that was drawn, so its settings can't be edited. Edit the original, or fade this one."
             }
@@ -108,6 +111,7 @@ impl NoRecipe {
             NoRecipe::DynamicDetail => 1,
             NoRecipe::Copy => 2,
             NoRecipe::WholePiece => 3,
+            NoRecipe::Transform => 4,
             NoRecipe::BeforeThisVersion | NoRecipe::LivingOff => return None,
         };
         Some(vec![b'O', b'X', b'N', b'R', tag])
@@ -119,6 +123,7 @@ impl NoRecipe {
                 1 => Some(Self::DynamicDetail),
                 2 => Some(Self::Copy),
                 3 => Some(Self::WholePiece),
+                4 => Some(Self::Transform),
                 _ => None,
             }
         } else {
@@ -201,6 +206,10 @@ pub struct LivingStroke {
 }
 
 impl LivingStroke {
+    pub(crate) fn label(&self) -> &'static str {
+        if self.no_recipe == Some(NoRecipe::Transform) { "Transform" } else { self.brush.label() }
+    }
+
     pub(crate) fn has_native_level(&self) -> bool {
         self.native.is_some()
     }
@@ -821,36 +830,64 @@ impl Editor {
     /// After a stroke of `brush` was committed as the newest undo entry:
     /// record it, when Living strokes is on.
     pub(crate) fn living_record(&mut self, brush: BrushKind, recipe: Option<StrokeRecipe>) {
+        if self.living.enabled && brush != BrushKind::Mask {
+            let piece = self.scene.active().id;
+            let reason = recipe.is_none().then_some(NoRecipe::DynamicDetail);
+            self.living_record_change(piece, brush, recipe, reason);
+        }
+    }
+
+    /// Record a topology-preserving gizmo edit as a layer stroke.
+    pub(crate) fn living_record_transform(&mut self, piece: u64) {
+        if self.living.enabled {
+            self.living_record_change(piece, BrushKind::Grab, None, Some(NoRecipe::Transform));
+        }
+    }
+
+    fn living_record_change(
+        &mut self,
+        piece_id: u64,
+        brush: BrushKind,
+        recipe: Option<StrokeRecipe>,
+        no_recipe: Option<NoRecipe>,
+    ) {
         let doc = &mut self.documents[self.active_document];
-        if !doc.living.enabled || brush == BrushKind::Mask {
+        let Some(index) = doc.scene.index_of(piece_id) else { return };
+        let mesh = &doc.scene.pieces[index].mesh;
+        let Some(entry) = doc.history.newest_id() else { return };
+        if doc.living.strokes.iter().any(|s| s.entry == entry && s.piece == piece_id) {
             return;
         }
-        let piece = doc.scene.active();
-        let Some(entry) = doc.history.newest_id() else { return };
-        if doc.living.strokes.iter().any(|s| s.entry == entry) {
-            return; // nothing new was committed
-        }
-        let Some(chunks) = doc.history.newest_chunks_before(piece.id) else { return };
-        let mesh = &piece.mesh;
         let painted = mesh.is_painted();
         let mut moved: Vec<(u32, Vec3, Vec3)> = Vec::new();
-        for (chunk, before, before_color) in chunks {
-            let Some(c) = mesh.chunks.get(chunk as usize) else { continue };
-            let r = c.vertices.start as usize..c.vertices.end as usize;
-            if before.len() != r.len() {
-                continue;
-            }
-            for (k, v) in r.enumerate() {
-                let d = mesh.positions[v] - before[k];
-                let dc = if painted && before_color.len() == before.len() {
-                    mesh.color[v] - before_color[k]
-                } else {
-                    Vec3::ZERO
-                };
-                if d.length_squared() > EPS * EPS || dc.length_squared() > EPS * EPS {
-                    moved.push((v as u32, d, dc));
+        if let Some(chunks) = doc.history.newest_chunks_before(piece_id) {
+            for (chunk, before, before_color) in chunks {
+                let Some(c) = mesh.chunks.get(chunk as usize) else { continue };
+                let r = c.vertices.start as usize..c.vertices.end as usize;
+                if before.len() != r.len() {
+                    continue;
+                }
+                for (k, v) in r.enumerate() {
+                    let d = mesh.positions[v] - before[k];
+                    let dc = if painted && before_color.len() == before.len() {
+                        mesh.color[v] - before_color[k]
+                    } else {
+                        Vec3::ZERO
+                    };
+                    if d.length_squared() > EPS * EPS || dc.length_squared() > EPS * EPS {
+                        moved.push((v as u32, d, dc));
+                    }
                 }
             }
+        } else if no_recipe == Some(NoRecipe::Transform)
+            && let Some(before) = doc.history.newest_mesh_before(piece_id)
+            && before.topology_version() == mesh.topology_version()
+        {
+            // Multi-piece drags keep one full-mesh snapshot per piece.
+            moved.extend(mesh.positions.iter().zip(&before.positions).enumerate().filter_map(|(v, (p, q))| {
+                let delta = *p - *q;
+                (delta.length_squared() > EPS * EPS).then_some((v as u32, delta, Vec3::ZERO))
+            }));
         }
         if moved.is_empty() {
             return;
@@ -859,7 +896,7 @@ impl Editor {
         let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
         let id = doc.living.next_id;
         doc.living.next_id += 1;
-        let (piece_id, topology, points) = (piece.id, mesh.topology_version(), mesh.vertex_count());
+        let (topology, points) = (mesh.topology_version(), mesh.vertex_count());
         doc.living.strokes.push(LivingStroke {
             id,
             piece: piece_id,
@@ -877,7 +914,7 @@ impl Editor {
             undone: false,
             group: None,
             applied: 1.0,
-            no_recipe: recipe.is_none().then_some(NoRecipe::DynamicDetail),
+            no_recipe,
             recipe: recipe.map(Arc::new),
         });
         self.living_record_into_target(piece_id);
@@ -3817,7 +3854,7 @@ mod tests {
         e.living_edit_setting(StrokeSetting::Radius(radius * 1.5), false);
         assert_eq!(e.living.strokes.iter().find(|s| s.id == copy).unwrap().deltas, copy_deltas);
 
-        // Whole-piece tools aren't strokes.
+        // Whole-piece tools have different recording behavior.
         assert!(NoRecipe::WholePiece.message().contains("Curve Move"));
         assert!(NoRecipe::WholePiece.message().contains("Deform"));
         assert!(NoRecipe::WholePiece.message().contains("gizmo"));
@@ -3833,7 +3870,10 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         e.pointer_moved(end + (end - layout.center));
         e.pointer_up();
-        assert!(e.living.strokes.is_empty(), "the gizmo is not a stroke");
+        let id = e.living.strokes[0].id;
+        assert_eq!(e.living.strokes[0].no_recipe, Some(NoRecipe::Transform));
+        e.living_open_edit(id).unwrap();
+        assert!(e.living_edit_block().unwrap().contains("fade this transform"));
     }
 
     #[test]

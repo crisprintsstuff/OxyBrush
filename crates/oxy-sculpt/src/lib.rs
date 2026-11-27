@@ -381,6 +381,8 @@ pub struct BrushSettings {
     pub smooth_paint: bool,
     /// Also lay vertex color with this sculpt stroke (same falloff as the dab).
     pub also_paint: bool,
+    /// Independent Also paint opacity. None follows sculpt strength for old recipes.
+    pub rgb_strength: Option<f32>,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
     /// Gravity: the surface under the brush also sags downward (world -Y)
@@ -442,6 +444,7 @@ impl Default for BrushSettings {
             accumulate: true,
             smooth_paint: false,
             also_paint: false,
+            rgb_strength: None,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -680,6 +683,7 @@ struct Dab {
     normal: Vec3,
     radius: f32,
     strength: f32,
+    rgb_strength: f32,
     /// Unit stroke direction (zero for the first dab).
     direction: Vec3,
     /// Movement since the previous dab (Snake Hook).
@@ -1282,12 +1286,10 @@ impl Stroke {
         } else {
             self.settings.radius
         };
-        let strength = if self.settings.pressure_strength {
-            self.settings.strength * shape_pressure(p, strength_curve)
-        } else {
-            self.settings.strength
-        };
-        let (radius, strength) = (radius * self.modulation.0, strength * self.modulation.1);
+        let pressure = if self.settings.pressure_strength { shape_pressure(p, strength_curve) } else { 1.0 };
+        let strength = self.settings.strength * pressure * self.modulation.1;
+        let rgb_strength = self.settings.rgb_strength.unwrap_or(self.settings.strength) * pressure * self.modulation.1;
+        let radius = radius * self.modulation.0;
         let drag = self.last_dab.map_or(Vec3::ZERO, |l| s.position - l);
         // Direction in the tangent plane.
         let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
@@ -1310,6 +1312,7 @@ impl Stroke {
             normal: n,
             radius,
             strength,
+            rgb_strength,
             direction,
             drag,
             tangent,
@@ -1360,6 +1363,7 @@ impl Stroke {
         };
         let mut base = self.make_dab(s, path_dist);
         base.strength *= self.strength_scale;
+        base.rgb_strength *= self.strength_scale;
         self.last_dab = Some(s.position);
         self.dab_count += 1;
         let kind = self.settings.kind;
@@ -1378,16 +1382,42 @@ impl Stroke {
             let spray = self.settings.spray.clamp(0.0, 1.0);
             let (a, r) = (self.random() * std::f32::consts::TAU, self.random().sqrt() * spray);
             base.center += (base.tangent * a.cos() + base.bitangent * a.sin()) * (r * base.radius);
-            base.strength *= 1.0 - spray * 0.5 * self.random();
+            let strength_factor = 1.0 - spray * 0.5 * self.random();
+            base.strength *= strength_factor;
+            base.rgb_strength *= strength_factor;
             base = base.rotated((self.random() - 0.5) * std::f32::consts::TAU * spray);
         }
         let alpha = self.alpha.clone();
+        let paint = if (kind == BrushKind::Paint || self.settings.also_paint)
+            && !self.settings.smooth_paint
+            && !(kind == BrushKind::Paint && self.invert)
+            && self.paint_jitter.enabled()
+        {
+            self.paint_jitter.sample(self.paint, self.paint_seed, self.dab_count - 1)
+        } else {
+            self.paint
+        };
+        // Older recipes never painted the multi-copy kernels. Preserve
+        // their replay and include color when using independent RGB.
+        let symmetric_paint =
+            (self.settings.also_paint && self.settings.rgb_strength.is_some() && base.rgb_strength > 0.0)
+                .then_some((paint, &mut self.layer));
         let copies = self.transforms.clone();
         // Where two symmetry copies cover the same vertex, blend their
         // displacements. Writing one after the other lets the second copy
         // chase vertices the first copy already moved, and the overlap tears.
         if copies.len() > 1 && kind == BrushKind::SnakeHook {
-            blend_snake_hook(mesh, &self.settings, self.invert, &base, &copies, self.sym_center, alpha.as_ref(), touch);
+            blend_snake_hook(
+                mesh,
+                &self.settings,
+                self.invert,
+                &base,
+                &copies,
+                self.sym_center,
+                alpha.as_ref(),
+                symmetric_paint,
+                touch,
+            );
         } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease | BrushKind::SharpCrease) {
             blend_symmetry_copies(
                 mesh,
@@ -1397,18 +1427,10 @@ impl Stroke {
                 &copies,
                 self.sym_center,
                 alpha.as_ref(),
+                symmetric_paint,
                 touch,
             );
         } else {
-            let paint = if (kind == BrushKind::Paint || self.settings.also_paint)
-                && !self.settings.smooth_paint
-                && !(kind == BrushKind::Paint && self.invert)
-                && self.paint_jitter.enabled()
-            {
-                self.paint_jitter.sample(self.paint, self.paint_seed, self.dab_count - 1)
-            } else {
-                self.paint
-            };
             for &m in &copies {
                 let dab = base.transformed(m, self.sym_center);
                 if kind == BrushKind::SceneProject {
@@ -2139,6 +2161,7 @@ fn blend_snake_hook(
     copies: &[Mat3],
     origin: Vec3,
     alpha: Option<&AlphaStamp>,
+    paint: Option<(Vec3, &mut LayerState)>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
@@ -2174,6 +2197,12 @@ fn blend_snake_hook(
     for (v, (weighted, sum_w, max_w)) in &acc {
         mesh.positions[*v as usize] += *weighted / overlap_divisor(*sum_w, *max_w, overlap);
     }
+    if let Some((color, layer)) = paint {
+        blend_paint(mesh, acc.iter().map(|(&v, weights)| (v, weights.2)), base.rgb_strength, color, layer);
+        for c in chunks {
+            mesh.mark_dirty(c);
+        }
+    }
     mesh.update_after_move(&moved);
 }
 
@@ -2195,6 +2224,7 @@ fn blend_symmetry_copies(
     copies: &[Mat3],
     origin: Vec3,
     alpha: Option<&AlphaStamp>,
+    paint: Option<(Vec3, &mut LayerState)>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let grooves = settings.kind != BrushKind::Pinch;
@@ -2237,6 +2267,12 @@ fn blend_symmetry_copies(
     let moved: Vec<u32> = acc.keys().copied().collect();
     for (v, (weighted, sum_w, max_w, groove)) in &acc {
         mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w) + *groove;
+    }
+    if let Some((color, layer)) = paint {
+        blend_paint(mesh, acc.iter().map(|(&v, weights)| (v, weights.2)), base.rgb_strength, color, layer);
+        for c in chunks {
+            mesh.mark_dirty(c);
+        }
     }
     mesh.update_after_move(&moved);
 }
@@ -2333,7 +2369,7 @@ fn apply_kernel(
     }
 
     if kind == BrushKind::Paint {
-        paint_affected(mesh, &affected, dab, paint, invert, settings.smooth_paint, layer);
+        paint_affected(mesh, &affected, dab.strength, paint, invert, settings.smooth_paint, layer);
         for c in chunks {
             mesh.mark_dirty(c);
         }
@@ -2349,6 +2385,18 @@ fn apply_kernel(
             mesh.mark_dirty(c);
         }
         return;
+    }
+
+    if settings.also_paint
+        && kind.supports_also_paint()
+        && dab.rgb_strength > 0.0
+        && (kind != BrushKind::Layer || settings.rgb_strength.is_some())
+    {
+        // Alt still inverts the sculpt. Color goes toward the paint swatch.
+        blend_paint(mesh, affected.iter().copied(), dab.rgb_strength, paint, layer);
+        for &c in &chunks {
+            mesh.mark_dirty(c);
+        }
     }
 
     if kind == BrushKind::Layer {
@@ -2378,7 +2426,6 @@ fn apply_kernel(
         dab
     };
     let new_positions = target_positions(mesh, &settings, invert, kernel_dab, &affected);
-    let also_paint = settings.also_paint && kind.supports_also_paint();
 
     let mut moved = Vec::with_capacity(new_positions.len());
     if capped {
@@ -2404,20 +2451,13 @@ fn apply_kernel(
         }
     }
     mesh.update_after_move(&moved);
-    if also_paint {
-        // Alt still inverts the sculpt; color always goes toward `paint`.
-        paint_affected(mesh, &affected, dab, paint, false, false, layer);
-        for c in chunks {
-            mesh.mark_dirty(c);
-        }
-    }
 }
 
 /// Lay vertex color on the dab's affected vertices (Paint brush, or Also paint).
 fn paint_affected(
     mesh: &mut Mesh,
     affected: &[(u32, f32)],
-    dab: &Dab,
+    strength: f32,
     paint: Vec3,
     invert: bool,
     smooth_paint: bool,
@@ -2438,7 +2478,7 @@ fn paint_affected(
                     }
                 }
                 let color = mesh.color[v as usize];
-                if count == 0 { color } else { color.lerp(sum / count as f32, (w * dab.strength).clamp(0.0, 1.0)) }
+                if count == 0 { color } else { color.lerp(sum / count as f32, (w * strength).clamp(0.0, 1.0)) }
             })
             .collect();
         for (&(v, _), color) in affected.iter().zip(colors) {
@@ -2448,13 +2488,23 @@ fn paint_affected(
         // Alt (invert) erases paint back to white. Cap the blend at the
         // highest weight×strength this stroke has reached on the vertex.
         let target = if invert { Vec3::ONE } else { paint };
-        for &(v, w) in affected {
-            let blend = (w * dab.strength).clamp(0.0, 1.0);
-            let entry = layer.paint.entry(v).or_insert((mesh.color[v as usize], 0.0));
-            if blend >= entry.1 {
-                entry.1 = blend;
-                mesh.color[v as usize] = entry.0.lerp(target, blend);
-            }
+        blend_paint(mesh, affected.iter().copied(), strength, target, layer);
+    }
+}
+
+fn blend_paint(
+    mesh: &mut Mesh,
+    affected: impl Iterator<Item = (u32, f32)>,
+    strength: f32,
+    target: Vec3,
+    layer: &mut LayerState,
+) {
+    for (v, w) in affected {
+        let blend = (w * strength).clamp(0.0, 1.0);
+        let entry = layer.paint.entry(v).or_insert((mesh.color[v as usize], 0.0));
+        if blend >= entry.1 {
+            entry.1 = blend;
+            mesh.color[v as usize] = entry.0.lerp(target, blend);
         }
     }
 }
@@ -2510,6 +2560,75 @@ mod tests {
             second.apply_dab(&mut mesh, sample, &mut touch);
         }
         assert!(opacity(&mesh, i) > after_first + 0.15);
+    }
+
+    #[test]
+    fn also_paint_rgb_strength_is_independent_and_records_pressure() {
+        let surface = primitives::icosphere(3, 1.0);
+        let center = surface.positions.iter().position(|p| p.distance(Vec3::Y) < 1e-5).unwrap();
+        let sample = StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 0.5 };
+        let settings = BrushSettings {
+            kind: BrushKind::Draw,
+            radius: 0.4,
+            strength: 0.7,
+            falloff: Falloff::Constant,
+            also_paint: true,
+            ..Default::default()
+        };
+        let run = |rgb_strength| {
+            let mut mesh = surface.clone();
+            let mut stroke = Stroke::new(BrushSettings { rgb_strength, ..settings }, Symmetry::default(), false)
+                .with_paint_color(Vec3::X)
+                .with_recording();
+            stroke.stamp(&mut mesh, sample, 4, &mut |_, _| {});
+            let recipe = stroke.take_recipe().unwrap();
+            (mesh, recipe)
+        };
+        let (unpainted, _) = run(Some(0.0));
+        let (painted, recipe) = run(Some(0.25));
+        assert_eq!(unpainted.positions, painted.positions);
+        assert_ne!(painted.positions, surface.positions);
+        assert!(!unpainted.is_painted());
+        assert!((painted.color[center].y - 0.875).abs() < 1e-6);
+
+        let bytes = recipe.to_bytes();
+        assert_eq!(bytes[4], 10);
+        let decoded = StrokeRecipe::from_bytes(&bytes, &|_| None).unwrap();
+        assert_eq!(decoded.settings.rgb_strength, Some(0.25));
+        let mut replay = surface.clone();
+        decoded.replay(&mut replay, &mut |_, _| {});
+        assert_eq!(replay.positions, painted.positions);
+        assert_eq!(replay.color, painted.color);
+
+        let (legacy, recipe) = run(None);
+        assert_eq!(recipe.to_bytes()[4], 9);
+        assert!((legacy.color[center].y - 0.65).abs() < 1e-6);
+        assert_eq!(StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_| None).unwrap().settings.rgb_strength, None);
+    }
+
+    #[test]
+    fn rgb_strength_colors_layer_and_blended_mirror_copies() {
+        let settings = BrushSettings {
+            also_paint: true,
+            rgb_strength: Some(0.25),
+            radius: 0.5,
+            falloff: Falloff::Constant,
+            ..Default::default()
+        };
+        for kind in [BrushKind::Layer, BrushKind::Pinch, BrushKind::Crease, BrushKind::SnakeHook] {
+            let mut mesh = primitives::icosphere(3, 1.0);
+            let mut stroke =
+                Stroke::new(BrushSettings { kind, ..settings }, Symmetry { x: true, ..Default::default() }, true)
+                    .with_paint_color(Vec3::X);
+            stroke.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
+            stroke.add_sample(
+                &mut mesh,
+                StrokeSample { position: Vec3::new(0.2, 0.98, 0.0), ..top_sample() },
+                &mut |_, _| {},
+            );
+            assert!(mesh.is_painted(), "{kind:?}");
+            assert!(mesh.color.iter().all(|c| c.y >= 0.75), "{kind:?} does not double the RGB blend at the seam");
+        }
     }
 
     #[test]

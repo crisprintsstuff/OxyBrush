@@ -41,8 +41,8 @@ other sculpting apps don't offer.
 - Each change is one undo step. Esc cancels the edit.
 - A stroke without a recipe says why it can't be edited: it was made
   before this version, with dynamic detail on, or by Curve Move or a
-  whole-piece tool (Deform, the gizmo). Curve Move and those tools are
-  not in the stroke list.
+  whole-piece tool. A recorded gizmo transform keeps its vertex changes
+  in the stroke list and uses stroke or layer strength to fade.
 
 ### Details
 
@@ -95,10 +95,10 @@ StrokeRecipe {
   this stroke happened to rebuild the mesh. When the mesh is rebuilt the
   stroke is baked with that topology change, as any stroke is; when it
   isn't, the stroke stays in the list and can be faded, without a recipe.
-- **Not living strokes:** Curve Move and whole-piece tools (Deform, the
-  gizmo). Curve stroke mode, Stamp, Line, and a freehand stroke kept
-  when you answer "no" to "edit this stroke as a curve?" are recorded,
-  including each curve point's size and strength.
+- **Brush recipes:** Curve stroke mode, Stamp, Line, and a freehand stroke
+  kept when you decline curve editing are recorded, including each curve
+  point's size and strength. Gizmo transforms store vertex displacements
+  for layer editing.
 - **Alpha identity** is a hash of every pixel quantized to the 16-bit
   values the project stores, not the alpha's name and not a sample of
   the in-memory floats (those change when a captured alpha is saved and

@@ -42,6 +42,7 @@ impl Editor {
             look.kind = kind;
             look.accumulate = self.brush_accumulates(kind);
             look.also_paint = self.brush_also_paints(kind);
+            look.rgb_strength = self.brush_rgb_override(kind);
             look.paint_jitter = self.paint_jitter(kind);
             look.pressure_curves = self.brush_pressure_overrides(kind);
             self.brush_looks.insert(kind, look);
@@ -68,7 +69,28 @@ impl Editor {
             return;
         }
         let current = self.capture_preset(kind.label());
-        self.brush_looks.entry(kind).or_insert(current).also_paint = also_paint;
+        let initial = self.strength(kind);
+        let look = self.brush_looks.entry(kind).or_insert(current);
+        look.also_paint = also_paint;
+        if also_paint {
+            look.rgb_strength.get_or_insert(initial);
+        }
+    }
+
+    pub(crate) fn brush_rgb_override(&self, kind: BrushKind) -> Option<f32> {
+        self.brush_looks
+            .get(&kind)
+            .and_then(|look| look.rgb_strength.or_else(|| look.also_paint.then_some(look.strength)))
+    }
+
+    pub(crate) fn brush_rgb_strength(&self, kind: BrushKind) -> f32 {
+        self.brush_rgb_override(kind).unwrap_or_else(|| kind.default_strength())
+    }
+
+    pub(crate) fn set_brush_rgb_strength(&mut self, strength: f32) {
+        let kind = self.brush_kind;
+        let current = self.capture_preset(kind.label());
+        self.brush_looks.entry(kind).or_insert(current).rgb_strength = Some(strength.clamp(0.0, 1.0));
     }
 
     pub(crate) fn paint_jitter(&self, kind: BrushKind) -> PaintJitter {
@@ -115,6 +137,7 @@ impl Editor {
         if k.supports_also_paint() {
             if let Some(look) = self.brush_looks.get_mut(&k) {
                 look.also_paint = p.also_paint;
+                look.rgb_strength = p.rgb_strength;
             } else {
                 let mut look = p.clone();
                 look.kind = k;
@@ -220,6 +243,40 @@ mod tests {
         assert!(loaded.brush_accumulates(BrushKind::Clay));
         loaded.apply_preset(&oxy_sculpt::BrushPreset::from_text("brush = clay").unwrap());
         assert!(loaded.brush_accumulates(BrushKind::Clay));
+    }
+
+    #[test]
+    fn rgb_strength_is_independent_per_brush_and_round_trips() {
+        let mut e = Editor::default();
+        e.remember_brushes = true;
+        for (kind, rgb) in [(BrushKind::Draw, 0.2), (BrushKind::Clay, 0.8)] {
+            e.brush_kind = kind;
+            e.sync_brush_look();
+            e.set_brush_also_paint(true);
+            e.set_brush_rgb_strength(rgb);
+            *e.strength_mut(kind) = 0.4;
+        }
+        let settings = crate::settings::Settings::from_text(&e.settings().to_text());
+        let mut loaded = Editor::default();
+        loaded.apply_settings(&settings);
+        for (kind, rgb) in [(BrushKind::Draw, 0.2), (BrushKind::Clay, 0.8)] {
+            loaded.brush_kind = kind;
+            loaded.sync_brush_look();
+            assert_eq!(loaded.brush_rgb_strength(kind), rgb);
+            assert_eq!(loaded.strength(kind), 0.4);
+            let preset = loaded.capture_preset("Colored sculpt");
+            assert_eq!(oxy_sculpt::BrushPreset::from_code(&preset.to_code()).unwrap().rgb_strength, Some(rgb));
+        }
+
+        let legacy = oxy_sculpt::BrushPreset::from_text(
+            "brush = clay
+strength = 0.65
+also_paint = true",
+        )
+        .unwrap();
+        loaded.apply_preset(&legacy);
+        *loaded.strength_mut(BrushKind::Clay) = 0.1;
+        assert_eq!(loaded.brush_rgb_strength(BrushKind::Clay), 0.65);
     }
 
     #[test]

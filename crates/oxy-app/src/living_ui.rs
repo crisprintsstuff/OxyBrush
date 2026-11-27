@@ -54,7 +54,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 .iter()
                 .map(|s| {
                     let group = s.group.and_then(|g| ed.living.group(g)).map(|g| g.name.clone());
-                    (s.id, s.brush.label().to_string(), ago(s.made), s.vertices.len(), s.strength, group)
+                    (s.id, s.label().to_string(), ago(s.made), s.vertices.len(), s.strength, group)
                 })
                 .collect();
             let cancel = ed.living_edit_id().is_some()

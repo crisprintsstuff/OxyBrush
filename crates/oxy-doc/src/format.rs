@@ -219,7 +219,8 @@
 //!   values `ALPH` stores, and the name is not an identity). A blob that
 //!   starts with `OXNR` and one tag byte is not a recipe: it says why the
 //!   stroke can't be edited (1 dynamic detail, 2 a mirrored copy or a split
-//!   side, 3 a whole-piece tool). Older readers of `STRI` treat that blob
+//!   side, 3 a whole-piece tool, 4 a recorded gizmo transform). Older readers
+//!   of `STRI` treat that blob
 //!   as a recipe they can't read and keep the stroke without one. The
 //!   section layout is unchanged, so a reader that skips unknown sections
 //!   still skips `STRI`, and a reader of version 1 recipes still reads them.
