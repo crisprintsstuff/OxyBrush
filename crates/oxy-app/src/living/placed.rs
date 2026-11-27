@@ -336,6 +336,7 @@ impl Editor {
                     points: mesh.vertex_count(),
                     vertices: change.vertices,
                     deltas: change.deltas,
+                    native: None,
                     colors: if change.colors.iter().any(|c| *c != Vec3::ZERO) { change.colors } else { Vec::new() },
                     strength: 1.0,
                     deleted: false,

@@ -198,6 +198,10 @@
 //!   `encode_strokes` for the layout. The piece's surface already includes
 //!   every stroke, so older readers skip it and open the project as it
 //!   looks, with the strokes fixed in place.
+//! - `STLV` (optional): native subdivision deltas for the preceding `STRK`,
+//!   in stroke order. Each record is `level:u32` (MAX means absent), then
+//!   `points:u32 count:u32 (vertex:u32 delta:f32*3)*count` in native-level
+//!   order. Earlier readers use the active-level projection in `STRK`.
 //! - `STRI` (optional, since 4.0.0-beta.16): what was drawn for the strokes
 //!   of the **preceding** `STRK` (their recipes, RFC 0025), in the same
 //!   order: `count:u32` then per stroke `len:u32 bytes:u8*len`, `len` 0 for
@@ -405,6 +409,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty() || !st.parts.is_empty()) {
             if !st.strokes.is_empty() {
                 sections.push((*b"STRK", encode_strokes(st)));
+                if st.strokes.iter().any(|s| s.native.is_some()) {
+                    sections.push((*b"STLV", encode_native_strokes(st)));
+                }
                 if st.strokes.iter().any(|s| !s.recipe.is_empty()) {
                     sections.push((*b"STRI", encode_stroke_recipes(st)));
                 }
@@ -991,6 +998,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring damaged strokes on piece {:?}: {e}", piece.name),
                 }
             }
+            b"STLV" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STLV before any piece".into()))?;
+                if let Some(strokes) = &mut piece.strokes {
+                    match decode_native_strokes(&raw, strokes.strokes.len()) {
+                        Ok(records) => {
+                            for (stroke, native) in strokes.strokes.iter_mut().zip(records) {
+                                stroke.native = native;
+                            }
+                        }
+                        Err(err) => log::warn!("ignoring damaged subdivision stroke deltas: {err}"),
+                    }
+                }
+            }
             b"STRI" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STRI before any piece".into()))?;
                 match (decode_stroke_recipes(&raw), &mut piece.strokes) {
@@ -1095,6 +1115,50 @@ fn encode_strokes(st: &crate::SavedStrokes) -> Vec<u8> {
         }
     }
     b
+}
+
+/// `STLV`: optional native-level records in STRK order. Older readers use
+/// the active-level projection already stored in STRK.
+fn encode_native_strokes(strokes: &crate::SavedStrokes) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for stroke in &strokes.strokes {
+        let Some(record) = &stroke.native else {
+            bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+            continue;
+        };
+        let (level, points, deltas) = record.parts();
+        for value in [level, points, deltas.len()] {
+            bytes.extend_from_slice(&(value as u32).to_le_bytes());
+        }
+        for &(v, d) in deltas {
+            bytes.extend_from_slice(&v.to_le_bytes());
+            for x in d.to_array() {
+                bytes.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+    }
+    bytes
+}
+
+fn decode_native_strokes(bytes: &[u8], count: usize) -> Result<Vec<Option<oxy_mesh::multires::LevelDisplacements>>> {
+    let mut r = Reader { data: bytes, pos: 0 };
+    r.check(count, 4)?;
+    (0..count)
+        .map(|_| {
+            let level = r.u32()?;
+            if level == u32::MAX {
+                return Ok(None);
+            }
+            let points = r.u32()? as usize;
+            let n = r.u32()? as usize;
+            r.check(n, 16)?;
+            let deltas =
+                (0..n).map(|_| Ok((r.u32()?, Vec3::new(r.f32()?, r.f32()?, r.f32()?)))).collect::<Result<_>>()?;
+            oxy_mesh::multires::LevelDisplacements::from_parts(level as usize, points, deltas)
+                .map(Some)
+                .ok_or_else(|| Error::Corrupt("invalid native stroke deltas".into()))
+        })
+        .collect()
 }
 
 fn encode_stroke_recipes(st: &crate::SavedStrokes) -> Vec<u8> {
@@ -1274,6 +1338,7 @@ fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes
             deltas,
             colors,
             recipe: Vec::new(),
+            native: None,
         });
     }
     Ok(crate::SavedStrokes { vertices, groups, strokes, parts: Vec::new() })
@@ -2529,6 +2594,7 @@ mod tests {
             colors: Vec::new(),
             // Any bytes: this crate keeps a recipe as it is.
             recipe: vec![1, 2, 3, 250],
+            native: None,
         };
         let painted = SavedStroke {
             brush: "paint".into(),
