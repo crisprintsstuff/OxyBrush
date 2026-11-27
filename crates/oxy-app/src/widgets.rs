@@ -324,6 +324,7 @@ pub enum Icon {
     ModePoints,
     ModeAuto,
     Selection(crate::editor::SelectShape),
+    CutLine,
     /// Drag handle grip (two vertical columns of dots).
     Grip,
     ChevronDown,
@@ -480,6 +481,9 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::Help => {
             p.circle_stroke(ctr, r * 0.75, s);
             p.text(ctr, egui::Align2::CENTER_CENTER, "?", egui::FontId::proportional(r * 1.1), c);
+        }
+        Icon::CutLine => {
+            p.line_segment([ctr + vec2(-0.73, 0.58) * r, ctr + vec2(0.73, -0.58) * r], s);
         }
         Icon::Selection(shape) => {
             use crate::editor::SelectShape::*;

@@ -10,6 +10,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Brush presets** ([#605](https://github.com/crisprintsstuff/OxyBrush/issues/605)). Right-click a preset to open its actions within the library. Each row also has an actions button for sharing, renaming, duplicating and deleting presets.
+- **Curve cutters** ([#598](https://github.com/crisprintsstuff/OxyBrush/issues/598)). Plane Clip, Line Split and Cut Away follow a multi-point Curve. Choose Line to draw a straight cut.
+
 - **Scene Project Stamp.** Dragging to resize the stamp reuses the target meshes for the gesture, reducing preview work on dense scenes.
 
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.

@@ -3585,17 +3585,32 @@ fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
     if (!ed.brush_roles().ctrl && !cut_brush) || ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() {
         return;
     }
+    use crate::editor::CutterShape;
     let mut buttons = |ui: &mut Ui| {
+        if cut_brush
+            && widgets::icon_button(
+                ui,
+                Icon::CutLine,
+                ed.cut_shape == CutterShape::Line,
+                true,
+                "Line: Drag a straight cutting line. Hold Alt to flip the side.",
+            )
+            .clicked()
+        {
+            ed.cut_shape = CutterShape::Line;
+            ed.select_curve = None;
+        }
         for (shape, description) in selection_shapes() {
             let tip = format!("{}: {description}", shape.label());
-            let selected = if cut_brush { ed.cut_shape == shape } else { ed.selection_shape == shape };
+            let selected =
+                if cut_brush { ed.cut_shape == CutterShape::Shape(shape) } else { ed.selection_shape == shape };
             if widgets::icon_button(ui, Icon::Selection(shape), selected, true, &tip).clicked() {
                 if cut_brush {
-                    ed.cut_shape = shape;
+                    ed.cut_shape = CutterShape::Shape(shape);
                 } else {
                     ed.selection_shape = shape;
-                    ed.select_curve = None;
                 }
+                ed.select_curve = None;
             }
         }
     };
@@ -6703,6 +6718,8 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
     let dup_id = egui::Id::unique("preset_dup_field");
     let mut rename_buf: String = ui.data_mut(|d| d.get_temp(rename_id)).unwrap_or_default();
     let mut dup_buf: String = ui.data_mut(|d| d.get_temp(dup_id)).unwrap_or_default();
+    let actions_id = egui::Id::unique("preset_actions");
+    let mut actions: Option<(bool, String)> = ui.data(|d| d.get_temp(actions_id).unwrap_or_default());
     let row = |ui: &mut Ui,
                p: &oxy_sculpt::BrushPreset,
                user: bool,
@@ -6714,28 +6731,42 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
                duplicate: &mut Option<(String, String)>,
                rename_buf: &mut String,
                dup_buf: &mut String,
+               actions: &mut Option<(bool, String)>,
                ed: &mut Editor| {
+        let key = (user, p.name.clone());
+        let shown = actions.as_ref() == Some(&key);
+        let starred = ed.is_favorite_preset(&p.name);
         ui.horizontal(|ui| {
             let t = widgets::brush_texture(&ctx, p.kind);
             ui.add(egui::Image::new((t.id(), egui::vec2(24.0, 24.0))));
-            let starred = ed.is_favorite_preset(&p.name);
             let label = if starred { format!("★ {}", p.name) } else { p.name.clone() };
             let tip = tips::preset_tip(p.kind.label(), p.radius_pt, p.strength, p.alpha.as_deref());
             let r = tips::hover(ui.add(egui::Button::selectable(false, label)), tip);
             if r.clicked() {
                 *apply = Some(p.clone());
+                *actions = None;
             }
-            r.context_menu(|ui| {
+            let more = ui.button("…").on_hover_text(format!("Actions for {}", p.name));
+            if r.secondary_clicked() || more.clicked() {
+                *actions = (!shown).then_some(key.clone());
+            }
+        });
+        // An independent context popup replaces the library popup in
+        // egui's popup memory. Keep the row's actions within the library.
+        if actions.as_ref() == Some(&key) {
+            ui.indent(("preset_actions", user, &p.name), |ui| {
                 let star = if starred { "Remove from Favorites" } else { "Add to Favorites" };
                 if tips::hover(ui.button(star), plain::FAVORITE_PRESET).clicked() {
                     *fav_toggle = Some(p.name.clone());
-                    ui.close();
+                    *actions = None;
                 }
                 if tips::hover(ui.button("Copy brush code"), plain::PRESET_COPY).clicked() {
                     *copy = Some(p.to_code());
+                    *actions = None;
                 }
                 if tips::hover(ui.button("Export to a file…"), plain::PRESET_EXPORT).clicked() {
                     ed.request_export_preset = Some(p.clone());
+                    *actions = None;
                 }
                 if user {
                     ui.separator();
@@ -6748,7 +6779,7 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
                         .clicked()
                         {
                             *rename = Some((p.name.clone(), rename_buf.clone()));
-                            ui.close();
+                            *actions = None;
                         }
                     });
                     ui.horizontal(|ui| {
@@ -6760,15 +6791,16 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
                         .clicked()
                         {
                             *duplicate = Some((p.name.clone(), dup_buf.clone()));
-                            ui.close();
+                            *actions = None;
                         }
                     });
                     if tips::hover(ui.button("Delete"), plain::PRESET_DELETE).clicked() {
                         *delete = Some(p.name.clone());
+                        *actions = None;
                     }
                 }
             });
-        });
+        }
     };
     ui.label(RichText::new("Starter presets").strong());
     for p in &starters {
@@ -6784,6 +6816,7 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
             &mut duplicate,
             &mut rename_buf,
             &mut dup_buf,
+            &mut actions,
             ed,
         );
     }
@@ -6812,6 +6845,7 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
                 &mut duplicate,
                 &mut rename_buf,
                 &mut dup_buf,
+                &mut actions,
                 ed,
             );
         }
@@ -6867,6 +6901,7 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
         d.insert_temp(code_id, code);
         d.insert_temp(rename_id, rename_buf);
         d.insert_temp(dup_id, dup_buf);
+        d.insert_temp(actions_id, actions);
     });
     if let Some(p) = apply {
         ed.apply_preset(&p);
@@ -6891,9 +6926,13 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
 
 fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     let r = tips::hover(ui.button("Presets…"), plain::PRESETS);
-    egui::Popup::from_toggle_button_response(&r)
+    if egui::Popup::from_toggle_button_response(&r)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| presets_popup(ui, ed));
+        .show(|ui| presets_popup(ui, ed))
+        .is_none()
+    {
+        ui.data_mut(|d| d.remove::<Option<(bool, String)>>(egui::Id::unique("preset_actions")));
+    }
     ui.label(RichText::new(widgets::brush_description(ed.brush_kind)).weak().small());
     ui.add_space(2.0);
     // Always-on essentials; the rest sits under Brush options.
@@ -8726,7 +8765,10 @@ fn draw_select_curve(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
     let pts = crate::select_shapes::curve_path(&points, &smooth);
     let painter = ui.painter().with_clip_rect(canvas);
-    let c = select_color(curve.action);
+    let c = match curve.target {
+        crate::editor::CurveSelectionTarget::Selection(action) => select_color(action),
+        crate::editor::CurveSelectionTarget::Cutter { .. } => Color32::from_rgb(255, 142, 96),
+    };
     let stroke = EStroke::new(1.5, c);
     for pair in pts.windows(2) {
         painter.line_segment([to_pt(pair[0]), to_pt(pair[1])], stroke);
@@ -9450,6 +9492,41 @@ mod tests {
             click_at(&mut ed, &ctx, lasso_button);
             assert_eq!(ed.selection_shape, SelectShape::Lasso);
         }
+    }
+
+    #[test]
+    fn right_clicking_a_saved_preset_keeps_its_library_open() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let name = "My saved brush";
+        ed.presets.push(ed.capture_preset(name));
+        let ctx = egui::Context::default();
+        let library_button = widgets_labelled(&mut ed, &ctx, "Presets…")[0].center();
+        click_at(&mut ed, &ctx, library_button);
+        let row = widgets_labelled(&mut ed, &ctx, name)[0].center();
+        frames_with(
+            &mut ed,
+            &ctx,
+            vec![
+                vec![egui::Event::PointerMoved(row)],
+                [true, false]
+                    .into_iter()
+                    .map(|pressed| egui::Event::PointerButton {
+                        pos: row,
+                        button: egui::PointerButton::Secondary,
+                        pressed,
+                        modifiers: Default::default(),
+                    })
+                    .collect(),
+                vec![],
+            ],
+        );
+        assert!(!widgets_labelled(&mut ed, &ctx, name).is_empty(), "the preset library is still open");
+        assert!(!widgets_labelled(&mut ed, &ctx, "Import file…").is_empty());
+        let export = widgets_labelled(&mut ed, &ctx, "Export to a file…")[0].center();
+        click_at(&mut ed, &ctx, export);
+        assert_eq!(ed.request_export_preset.as_ref().map(|p| p.name.as_str()), Some(name));
+        assert!(!widgets_labelled(&mut ed, &ctx, name).is_empty(), "the preset library is still open");
     }
 
     #[test]

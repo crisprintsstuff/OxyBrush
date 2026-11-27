@@ -741,6 +741,42 @@ impl SelectShape {
     }
 }
 
+/// The cutter also offers the original, straight plane-cut gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CutterShape {
+    Line,
+    Shape(SelectShape),
+}
+
+impl CutterShape {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Line => "Line",
+            Self::Shape(shape) => shape.label(),
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            Self::Line => Self::Shape(SelectShape::Rectangle),
+            Self::Shape(SelectShape::Curve) => Self::Line,
+            Self::Shape(shape) => Self::Shape(shape.next()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveSelectionTarget {
+    Selection(SelectAction),
+    Cutter { kind: BrushKind, piece: u64 },
+}
+
+impl Default for CurveSelectionTarget {
+    fn default() -> Self {
+        Self::Selection(SelectAction::default())
+    }
+}
+
 /// A curve selection being drawn: what it will do, and its points
 /// (physical px), each smooth (the curve bends through it) or a sharp
 /// corner. Drawn by dragging from the first point (released to apply) or
@@ -748,7 +784,7 @@ impl SelectShape {
 /// smooth point at the pointer, a second quick tap makes it sharp (#446).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SelectCurve {
-    pub action: SelectAction,
+    pub target: CurveSelectionTarget,
     pub points: Vec<Vec2>,
     /// Per point: smooth (true) or a sharp corner.
     pub smooth: Vec<bool>,
@@ -934,7 +970,7 @@ pub enum Drag {
         shape: oxy_sculpt::InsertShape,
     },
     /// Screen curve cutting gesture (PlaneClip, LineSplit, CutAway).
-    /// Used when the selection shape is Curve: a two-point line that
+    /// The straight Line cutter: a two-point line that
     /// defines a view-aligned cutting plane.
     CurveCut {
         kind: BrushKind,
@@ -1222,7 +1258,7 @@ pub struct Editor {
     /// Cutter shape for Plane Clip / Line Split / Cut Away (#492). Defaults
     /// to Curve (the two-point cutting line); closed shapes flatten, group
     /// or trim the region they enclose.
-    pub cut_shape: SelectShape,
+    pub cut_shape: CutterShape,
     /// A curve selection being clicked out (`SelectShape::Curve`).
     pub select_curve: Option<SelectCurve>,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
@@ -1661,7 +1697,7 @@ impl Default for Editor {
             pressure_shape: LINEAR_PRESSURE_SHAPE,
             pressure_shape_size: LINEAR_PRESSURE_SHAPE,
             selection_shape: SelectShape::Rectangle,
-            cut_shape: SelectShape::Curve,
+            cut_shape: CutterShape::Line,
             select_curve: None,
             request_load_alpha: false,
             request_export_alpha: false,
@@ -2884,9 +2920,7 @@ impl Editor {
                 (false, false) => SelectAction::Mask,
                 (false, true) => SelectAction::Unmask,
             };
-            self.select_curve =
-                Some(SelectCurve { action, points: vec![p], smooth: vec![false], held: true, ..Default::default() });
-            self.status = "Curve: drag (or click points); tap Alt for a curve point, twice for a corner; release (or Enter) applies, Alt held: the other side".into();
+            self.start_select_curve(CurveSelectionTarget::Selection(action), p);
             return;
         }
         // A circle or ellipse is usually centred on what you want, so with
@@ -4573,25 +4607,23 @@ impl Editor {
         }
     }
 
-    /// Begin a Plane Clip / Line Split / Cut Away gesture. Curve keeps the
-    /// two-point cutting line; other cutter shapes draw a closed region
-    /// (#492).
+    /// Begin a Line, Curve, or closed-shape cutter gesture.
     fn start_cut_gesture(&mut self, kind: BrushKind, p: Vec2) {
-        if self.cut_shape == SelectShape::Curve {
-            self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
-        } else {
-            self.drag = Drag::ShapeCut { kind, shape: self.cut_shape, points: vec![p], pan_from: None };
+        match self.cut_shape {
+            CutterShape::Line => {
+                self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+            }
+            CutterShape::Shape(SelectShape::Curve) => {
+                let piece = self.scene.active().id;
+                self.start_select_curve(CurveSelectionTarget::Cutter { kind, piece }, p);
+            }
+            CutterShape::Shape(shape) => {
+                self.drag = Drag::ShapeCut { kind, shape, points: vec![p], pan_from: None };
+            }
         }
     }
 
     /// Apply a closed cutter shape to the active piece (#492).
-    ///
-    /// - Plane Clip: flattens vertices inside the shape onto a view-facing
-    ///   plane through the piece centre (Alt: outside).
-    /// - Line Split: assigns a new face group to faces whose centroids fall
-    ///   inside the shape (Alt: outside), without changing topology.
-    /// - Cut Away: removes faces inside the shape and closes the openings
-    ///   (Alt: outside).
     fn finish_shape_cut(&mut self, kind: BrushKind, shape: SelectShape, points: Vec<Vec2>) {
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
         let local: Vec<Vec2> = points.iter().map(|p| *p - origin).collect();
@@ -4600,19 +4632,36 @@ impl Editor {
             self.status = "Shape too small".into();
             return;
         }
-        let outside = self.modifiers.alt;
+        self.finish_region_cut(kind, |p| point_in_polygon(p, &poly), self.modifiers.alt, false);
+    }
+
+    /// Apply a projected screen region using the same cutter operations
+    /// as the closed shapes. The complement is taken after mirroring.
+    pub(crate) fn finish_region_cut(
+        &mut self,
+        kind: BrushKind,
+        contains: impl Fn(Vec2) -> bool,
+        opposite: bool,
+        curve: bool,
+    ) {
         let camera = self.camera;
         let size = self.canvas_size();
         let center = self.symmetry_center();
         let transforms = self.symmetry.transforms();
-        let in_poly = move |p: Vec3| {
+        let in_region = move |p: Vec3| {
             let hit = transforms.iter().any(|t| {
                 let q = center + *t * (p - center);
-                camera.project(q, size).is_some_and(|s| point_in_polygon(s, &poly))
+                camera.project(q, size).is_some_and(&contains)
             });
-            hit != outside
+            hit != opposite
         };
 
+        let region = match (curve, opposite) {
+            (false, false) => "inside the shape",
+            (false, true) => "outside the shape",
+            (true, false) => "on the selected side of the curve",
+            (true, true) => "on the opposite side of the curve",
+        };
         match kind {
             BrushKind::PlaneClip => {
                 let bounds = self.scene.active().mesh.bounds();
@@ -4638,7 +4687,7 @@ impl Editor {
                         continue;
                     }
                     let p = piece.mesh.positions[i];
-                    if !in_poly(p) {
+                    if !in_region(p) {
                         continue;
                     }
                     let mask = piece.mesh.mask.get(i).copied().unwrap_or(0.0);
@@ -4656,8 +4705,7 @@ impl Editor {
                 } else {
                     piece.mesh.update_after_move(&moved);
                     doc.history.commit();
-                    let side = if outside { "outside" } else { "inside" };
-                    self.status = format!("Clipped {} vertices {side} the shape", moved.len());
+                    self.status = format!("Clipped {} vertices {region}", moved.len());
                 }
             }
             BrushKind::LineSplit => {
@@ -4673,7 +4721,7 @@ impl Editor {
                             return mesh.groups()[ti];
                         }
                         let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
-                        if in_poly(c) {
+                        if in_region(c) {
                             any = true;
                             new_group
                         } else {
@@ -4686,8 +4734,7 @@ impl Editor {
                     return;
                 }
                 self.edit_faces(kind.label(), |m| m.set_groups(groups));
-                let side = if outside { "outside" } else { "inside" };
-                self.status = format!("New polygroup for faces {side} the shape");
+                self.status = format!("New polygroup for faces {region}");
             }
             BrushKind::CutAway => {
                 let mesh = &self.scene.active().mesh;
@@ -4698,7 +4745,7 @@ impl Editor {
                     let t = &mesh.triangles[ti];
                     let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
                     // Keep faces that are NOT in the cut-away region.
-                    !in_poly(c)
+                    !in_region(c)
                 };
                 let any_cut = (0..mesh.triangle_count()).any(|ti| !keep(ti) && !mesh.hidden()[ti]);
                 if !any_cut {
@@ -4714,14 +4761,13 @@ impl Editor {
                 let closed = oxy_mesh::topo::close_holes(&mut data);
                 let tri_count = data.triangles.len();
                 self.replace_active_mesh(kind.label(), Mesh::from_data(data));
-                let side = if outside { "outside" } else { "inside" };
                 self.status = if closed > 0 {
                     format!(
-                        "Trimmed faces {side} the shape ({tri_count} faces, closed {closed} hole{})",
+                        "Trimmed faces {region} ({tri_count} faces, closed {closed} hole{})",
                         if closed == 1 { "" } else { "s" }
                     )
                 } else {
-                    format!("Trimmed faces {side} the shape ({tri_count} faces)")
+                    format!("Trimmed faces {region} ({tri_count} faces)")
                 };
             }
             _ => {}
@@ -10061,6 +10107,7 @@ impl Editor {
             C::SelectionLasso => {
                 if self.brush_kind.is_curve_cut() {
                     self.cut_shape = self.cut_shape.next();
+                    self.select_curve = None;
                     self.status = format!("Cutter: {}", self.cut_shape.label().to_lowercase());
                 } else {
                     self.selection_shape = self.selection_shape.next();
@@ -17777,7 +17824,7 @@ mod tests {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.brush_kind = BrushKind::PlaneClip;
-        e.cut_shape = SelectShape::Rectangle;
+        e.cut_shape = CutterShape::Shape(SelectShape::Rectangle);
         let before = e.scene.active().mesh.positions.clone();
 
         e.pointer = Some(Vec2::new(250.0, 200.0));
@@ -17794,11 +17841,60 @@ mod tests {
     }
 
     #[test]
+    fn curve_cutters_follow_the_clicked_path_and_undo() {
+        let points = [Vec2::new(270.0, 320.0), Vec2::new(400.0, 230.0), Vec2::new(530.0, 320.0)];
+        for kind in [BrushKind::PlaneClip, BrushKind::LineSplit, BrushKind::CutAway] {
+            let mut e = editor();
+            e.brush_kind = kind;
+            e.cut_shape = CutterShape::Shape(SelectShape::Curve);
+            e.symmetry = Symmetry::default();
+            let before = e.scene.active().mesh.clone();
+            for p in points {
+                e.pointer = Some(p);
+                e.pointer_down(PointerButton::Primary);
+                e.pointer_up();
+            }
+            let curve = e.select_curve.as_ref().expect("the cutter accepts clicked control points");
+            assert_eq!(curve.points, points);
+            assert_eq!(e.scene.active().mesh.positions, before.positions);
+
+            e.select_curve_apply(false);
+            let mesh = &e.scene.active().mesh;
+            match kind {
+                BrushKind::PlaneClip => {
+                    assert_ne!(mesh.positions, before.positions);
+                    assert_eq!(mesh.triangles, before.triangles);
+                }
+                BrushKind::LineSplit => {
+                    let project = |p| e.camera.project(p, e.canvas_size()).unwrap();
+                    let curve_side = |p| crate::select_shapes::curve_side(&points, p);
+                    let straight = [points[0], points[2]];
+                    let mut bend_matters = false;
+                    for (face, &group) in mesh.triangles.iter().zip(mesh.groups()) {
+                        let c = face.iter().map(|&v| mesh.positions[v as usize]).sum::<Vec3>() / 3.0;
+                        let p = project(c);
+                        assert_eq!(group != 0, curve_side(p));
+                        bend_matters |= crate::select_shapes::curve_side(&straight, p) != curve_side(p);
+                    }
+                    assert!(bend_matters, "the middle control point changes which faces are selected");
+                }
+                BrushKind::CutAway => assert_ne!(mesh.triangles, before.triangles),
+                _ => unreachable!(),
+            }
+            e.undo();
+            let mesh = &e.scene.active().mesh;
+            assert_eq!(mesh.positions, before.positions);
+            assert_eq!(mesh.triangles, before.triangles);
+            assert_eq!(mesh.groups(), before.groups());
+        }
+    }
+
+    #[test]
     fn shape_cut_circle_line_split_new_polygroup() {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.brush_kind = BrushKind::LineSplit;
-        e.cut_shape = SelectShape::Circle;
+        e.cut_shape = CutterShape::Shape(SelectShape::Circle);
         let orig_tcount = e.scene.active().mesh.triangle_count();
         let orig_groups = e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>();
         assert_eq!(orig_groups.len(), 1);
@@ -17823,7 +17919,7 @@ mod tests {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.brush_kind = BrushKind::CutAway;
-        e.cut_shape = SelectShape::Rectangle;
+        e.cut_shape = CutterShape::Shape(SelectShape::Rectangle);
         let orig_tcount = e.scene.active().mesh.triangle_count();
         let orig_positions = e.scene.active().mesh.positions.clone();
 
