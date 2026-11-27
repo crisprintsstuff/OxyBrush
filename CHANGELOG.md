@@ -6,6 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Plugin geometry editing** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Repeated writes can share one Undo step. Change events identify their source, and desktop scene state includes the viewport light rig.
+- **Brush alpha import** ([#601](https://github.com/crisprintsstuff/OxyBrush/issues/601)). Load JPEG, TIFF, WebP and grayscale or RGB PSD composites alongside PNG.
 - **Retopology Contour** ([#576](https://github.com/crisprintsstuff/OxyBrush/issues/576)). Draw successive cuts across a limb to create rings and connect them with a quad strip.
 - **Python and MCP plugins** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Patch selected vertices in one undo step, and display a temporary RGBA render that clears when the desktop camera, viewport dimensions, or scene changes.
 - **Also paint RGB Strength** ([#585](https://github.com/crisprintsstuff/OxyBrush/issues/585)). Set color opacity independently of sculpt strength. The value is kept per brush and travels with presets and stroke recipes.
@@ -18,6 +20,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Alpha rotation and Roll** ([#601](https://github.com/crisprintsstuff/OxyBrush/issues/601)). The thumbnail follows the rotation slider. Directional alphas align from the first dab, and Roll filters repeat seams and keeps its pitch steady as pressure changes the width.
 - **Windows startup** ([#577](https://github.com/crisprintsstuff/OxyBrush/issues/577)). Use Direct3D 12 on the reported Intel UHD Graphics 600 adapter to avoid a startup crash in the Intel Vulkan driver.
 - **Pen pressure** ([#581](https://github.com/crisprintsstuff/OxyBrush/issues/581)). Preserve light pen readings at stroke start and carry the last measured force through missing samples to avoid sudden full-size or full-strength dabs.
 - **Scene Project** ([#612](https://github.com/crisprintsstuff/OxyBrush/issues/612)). Reuse a ray index throughout the stamp gesture and compute large Stamp previews on a worker. The previous preview stays visible while the next one computes.

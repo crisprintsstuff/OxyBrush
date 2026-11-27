@@ -418,10 +418,18 @@ struct Pending {
     color: bool,
 }
 
+/// Consecutive geometry writes from one MCP listener that belong to one edit.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GeometryUndoGroup {
+    pub session: u64,
+    pub name: String,
+}
+
 pub struct History {
     undo: VecDeque<Entry>,
     redo: Vec<Entry>,
     pending: Option<Pending>,
+    geometry_group: Option<(GeometryUndoGroup, u64)>,
     budget_bytes: usize,
     /// Incremented on every recorded change, undo and redo.
     revision: u64,
@@ -443,6 +451,7 @@ impl History {
             undo: VecDeque::new(),
             redo: Vec::new(),
             pending: None,
+            geometry_group: None,
             budget_bytes,
             revision: 0,
             next_id: 1,
@@ -585,11 +594,37 @@ impl History {
 
     /// Finish the stroke. Empty strokes are discarded.
     pub fn commit(&mut self) {
-        if let Some(p) = self.pending.take()
-            && !p.snapshots.is_empty()
+        self.commit_geometry(None);
+    }
+
+    /// Coalesce consecutive writes when the session, group, piece and
+    /// topology still match. A write in a group must snapshot all fields
+    /// because a later write may change colors as well as positions.
+    pub fn commit_geometry(&mut self, group: Option<GeometryUndoGroup>) {
+        let Some(p) = self.pending.take().filter(|p| !p.snapshots.is_empty()) else { return };
+        if let Some(group) = group.as_ref()
+            && self
+                .geometry_group
+                .as_ref()
+                .is_some_and(|(prior, revision)| prior == group && *revision == self.revision)
+            && let Some(Change::Chunks { piece, topology, snaps }) = self.undo.back_mut().map(|e| &mut e.change)
+            && (*piece, *topology) == (p.piece, p.topology)
         {
-            self.push(p.label, Change::Chunks { piece: p.piece, topology: p.topology, snaps: p.snapshots });
+            // Keep the earliest snapshot of each chunk. Undo swaps those
+            // values with the final mesh, so Redo restores the whole edit.
+            let mut captured = p.touched;
+            captured.fill(false);
+            for snap in snaps.iter() {
+                captured[snap.chunk as usize] = true;
+            }
+            snaps.extend(p.snapshots.into_iter().filter(|snap| !captured[snap.chunk as usize]));
+            self.revision += 1;
+            self.geometry_group.as_mut().unwrap().1 = self.revision;
+            self.enforce_budget();
+            return;
         }
+        self.push(p.label, Change::Chunks { piece: p.piece, topology: p.topology, snaps: p.snapshots });
+        self.geometry_group = group.map(|group| (group, self.revision));
     }
 
     /// Record a topology change: `previous` and `previous_multires` are the
@@ -650,6 +685,7 @@ impl History {
     }
 
     fn push(&mut self, label: String, change: Change) {
+        self.geometry_group = None;
         self.redo.clear();
         let id = self.next_id;
         self.next_id += 1;

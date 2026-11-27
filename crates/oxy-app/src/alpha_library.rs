@@ -14,7 +14,7 @@ pub struct Imported {
 
 pub fn import(path: &Path, dir: Option<&Path>) -> Result<Imported, String> {
     let mut alpha =
-        crate::support::load_alpha_png(path).map_err(|err| format!("Could not load {}: {err}", path.display()))?;
+        crate::support::load_alpha_image(path).map_err(|err| format!("Could not load {}: {err}", path.display()))?;
     let library_error = match dir {
         Some(dir) => store(dir, &mut alpha).err(),
         None => Some("No user alpha folder is available".into()),

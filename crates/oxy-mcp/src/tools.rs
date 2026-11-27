@@ -136,6 +136,7 @@ pub enum Action {
         name: Option<String>,
         /// When set, must match the piece's current topology version.
         topology_version: Option<u64>,
+        undo_group: Option<String>,
     },
     /// The camera and pixel dimensions a viewport overlay must match.
     GetViewportState,
@@ -151,6 +152,7 @@ pub enum Action {
         index: Option<usize>,
         name: Option<String>,
         topology_version: u64,
+        undo_group: Option<String>,
         patch: crate::state::GeometryPatch,
     },
 }
@@ -299,6 +301,7 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
             index: opt_usize(args, "index")?,
             name: opt_string(args, "name")?,
             topology_version: opt_u64(args, "topology_version")?,
+            undo_group: undo_group(args)?,
         }),
         "get_viewport_state" => Ok(Action::GetViewportState),
         "set_viewport_image" => Ok(Action::SetViewportImage {
@@ -311,11 +314,20 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
             index: opt_usize(args, "index")?,
             name: opt_string(args, "name")?,
             topology_version: opt_u64(args, "topology_version")?.ok_or("missing topology_version")?,
+            undo_group: undo_group(args)?,
             patch: serde_json::from_value(args.get("patch").ok_or("missing patch")?.clone())
                 .map_err(|e| format!("invalid geometry patch: {e}"))?,
         }),
         other => Err(format!("unknown tool `{other}`")),
     }
+}
+
+fn undo_group(args: &Value) -> Result<Option<String>, String> {
+    let group = opt_string(args, "undo_group")?;
+    if group.as_ref().is_some_and(|g| g.trim().is_empty() || g.len() > 128) {
+        return Err("undo_group must contain 1–128 bytes and cannot be blank".into());
+    }
+    Ok(group)
 }
 
 fn parse_stroke(args: &Value) -> Result<Action, String> {
@@ -617,8 +629,8 @@ pub fn tool_defs() -> Vec<Value> {
         ),
         tool(
             "set_geometry",
-            "Apply positions, vertex colors and/or mask from an OXYG file onto a piece (same format as get_geometry). One undo step. Vertex and triangle counts must match; normals, indices, groups and hidden in the file are ignored. Pass topology_version from get_geometry/scene_state to refuse a stale write. Omit id/index/name for the active piece.",
-            &json!({"path": {"type": "string"}, "id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "topology_version": {"type": "integer"}}),
+            "Apply positions, vertex colors and/or mask from an OXYG file onto a piece (same format as get_geometry). One undo step. Vertex and triangle counts must match; normals, indices, groups and hidden in the file are ignored. Pass topology_version from get_geometry/scene_state to refuse a stale write. Omit id/index/name for the active piece. Use the same undo_group for consecutive writes to merge their undo entry.",
+            &json!({"path": {"type": "string"}, "id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "topology_version": {"type": "integer"}, "undo_group": {"type": "string"}}),
             &["path"],
         ),
         tool(
@@ -636,10 +648,11 @@ pub fn tool_defs() -> Vec<Value> {
         tool("clear_viewport_image", "Remove the temporary desktop viewport image.", &json!({}), &[]),
         tool(
             "patch_geometry",
-            "Set sparse absolute positions, colors or mask values as one undo step. Get indices and topology_version from get_geometry. Omitted arrays and unlisted vertices are untouched. Omit id/index/name for the active piece.",
+            "Set sparse absolute positions, colors or mask values as one undo step. Get indices and topology_version from get_geometry. Omitted arrays and unlisted vertices are untouched. Use the same undo_group for consecutive writes to one piece. Omit id/index/name for the active piece.",
             &json!({
                 "id": {"type": "integer"}, "index": {"type": "integer"},
                 "name": {"type": "string"}, "topology_version": {"type": "integer"},
+                "undo_group": {"type": "string"},
                 "patch": {
                     "type": "object", "required": ["indices"], "additionalProperties": false,
                     "properties": {

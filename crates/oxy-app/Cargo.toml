@@ -41,6 +41,8 @@ rfd.workspace = true
 fs4 = "0.13.1"
 dirs.workspace = true
 png.workspace = true
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "tiff", "webp"] }
+miniz_oxide.workspace = true
 # JPEG matcaps (pure Rust; MIT OR Apache-2.0 OR Zlib).
 zune-jpeg = "0.5"
 oxy-update.workspace = true
