@@ -15,6 +15,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Pen pressure** ([#581](https://github.com/crisprintsstuff/OxyBrush/issues/581)). Preserve light pen readings at stroke start and carry the last measured force through missing samples to avoid sudden full-size or full-strength dabs.
+- **Scene Project** ([#612](https://github.com/crisprintsstuff/OxyBrush/issues/612)). Reuse a ray index for the projection targets throughout the stamp gesture and project large dabs across CPU cores.
+
 - **Brush presets** ([#605](https://github.com/crisprintsstuff/OxyBrush/issues/605)). Right-click a preset to open its actions within the library. Each row also has an actions button for sharing, renaming, duplicating and deleting presets.
 - **Curve cutters** ([#598](https://github.com/crisprintsstuff/OxyBrush/issues/598)). Plane Clip, Line Split and Cut Away follow a multi-point Curve. Choose Line to draw a straight cut.
 

@@ -24,6 +24,7 @@ pub mod unsubdivide;
 pub mod polyedit;
 pub mod polyshape;
 pub mod primitives;
+pub mod raycast;
 pub mod retopo;
 pub mod topo;
 
@@ -2278,6 +2279,11 @@ fn orient_normal(normal: Vec3, toward: Vec3) -> Vec3 {
 
 /// Möller–Trumbore ray/triangle intersection, two-sided.
 fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    line_triangle(o, d, a, b, c).filter(|&t| t > 0.0)
+}
+
+#[inline]
+fn line_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let e1 = b - a;
     let e2 = c - a;
     let p = d.cross(e2);
@@ -2296,8 +2302,7 @@ fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     if v < 0.0 || u + v > 1.0 {
         return None;
     }
-    let t = e2.dot(q) * inv;
-    (t > 0.0).then_some(t)
+    Some(e2.dot(q) * inv)
 }
 
 fn morton3(n: Vec3) -> u32 {

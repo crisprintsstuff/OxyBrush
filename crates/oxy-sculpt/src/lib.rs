@@ -22,7 +22,7 @@ pub use preset::BrushPreset;
 pub use recipe::{RecipeEvent, StoredChange, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 
 use glam::{Mat3, Vec2, Vec3};
-use oxy_mesh::Mesh;
+use oxy_mesh::{Mesh, raycast::RaycastIndex};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -913,6 +913,28 @@ pub fn plan_dabs(wanted: f32, dab_ms: Option<f32>, budget_ms: f32, hard_cap: u32
     (n_max, (wanted / n_max as f32).max(1.0))
 }
 
+/// Immutable target geometry and ray indices shared by Scene Project previews.
+pub struct SceneProjectTargets {
+    meshes: Arc<[Mesh]>,
+    indices: Vec<RaycastIndex>,
+}
+
+impl SceneProjectTargets {
+    pub fn new(meshes: impl Into<Arc<[Mesh]>>) -> Self {
+        let meshes = meshes.into();
+        let indices = meshes.iter().map(RaycastIndex::new).collect();
+        Self { meshes, indices }
+    }
+
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
+    }
+}
+
 /// An in-progress stroke.
 pub struct Stroke {
     settings: BrushSettings,
@@ -955,7 +977,7 @@ pub struct Stroke {
     /// ([`Stroke::with_recording`]).
     log: Option<Vec<RecipeEvent>>,
     /// Other visible pieces for [`BrushKind::SceneProject`] (set by the app).
-    scene_targets: Option<Arc<[Mesh]>>,
+    scene_targets: Option<Arc<SceneProjectTargets>>,
 }
 
 impl Stroke {
@@ -993,8 +1015,12 @@ impl Stroke {
     /// Meshes to project onto for [`BrushKind::SceneProject`] (other visible
     /// pieces). Empty means the brush has nowhere to land and leaves the
     /// surface alone.
-    pub fn with_scene_targets(mut self, targets: impl Into<Arc<[Mesh]>>) -> Self {
-        self.scene_targets = Some(targets.into());
+    pub fn with_scene_targets(self, targets: impl Into<Arc<[Mesh]>>) -> Self {
+        self.with_shared_scene_targets(Arc::new(SceneProjectTargets::new(targets)))
+    }
+
+    pub fn with_shared_scene_targets(mut self, targets: Arc<SceneProjectTargets>) -> Self {
+        self.scene_targets = Some(targets);
         self
     }
 
@@ -1439,7 +1465,7 @@ impl Stroke {
                         &self.settings,
                         self.invert,
                         &dab,
-                        self.scene_targets.as_deref().unwrap_or_default(),
+                        self.scene_targets.as_deref(),
                         alpha.as_ref(),
                         touch,
                     );
@@ -2286,13 +2312,11 @@ fn apply_scene_project(
     settings: &BrushSettings,
     invert: bool,
     dab: &Dab,
-    targets: &[Mesh],
+    targets: Option<&SceneProjectTargets>,
     alpha: Option<&AlphaStamp>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
-    if targets.is_empty() {
-        return;
-    }
+    let Some(targets) = targets.filter(|t| !t.is_empty()) else { return };
     let (chunks, affected) = gather_affected(mesh, settings, dab, alpha);
     if affected.is_empty() {
         return;
@@ -2314,34 +2338,37 @@ fn apply_scene_project(
     // Stand-off: a hundredth of the brush radius, so projected verts sit
     // just clear of the target instead of z-fighting through it.
     let stand_off = dab.radius * 0.01;
-    let mut moved = Vec::new();
-    for &(v, w) in &affected {
+    let project = |&(v, w): &(u32, f32)| {
         let p = mesh.positions[v as usize];
         let blend = (w * dab.strength).min(1.0);
         if blend <= 0.0 {
-            continue;
+            return None;
         }
-        let mut best: Option<(f32, Vec3, Vec3)> = None;
-        for target in targets {
-            for &ray_dir in &[dir, -dir] {
-                let Some(hit) = target.raycast(p, ray_dir) else { continue };
-                let t = hit.t.abs();
-                if best.is_some_and(|(bt, _, _)| t >= bt) {
-                    continue;
-                }
-                let n = hit.normal.normalize_or_zero();
-                // Push off along the hit normal, away from the ray origin.
-                let outward = if (hit.point - p).dot(n) >= 0.0 { n } else { -n };
-                best = Some((t, hit.point + outward * stand_off, n));
+        let mut best: Option<(f32, Vec3)> = None;
+        for (target, index) in targets.meshes.iter().zip(&targets.indices) {
+            let Some(hit) = index.nearest_on_line(target, p, dir) else { continue };
+            let t = hit.t.abs();
+            if best.is_some_and(|(bt, _)| t >= bt) {
+                continue;
             }
+            let n = hit.normal.normalize_or_zero();
+            let outward = if (hit.point - p).dot(n) >= 0.0 { n } else { -n };
+            best = Some((t, hit.point + outward * stand_off));
         }
-        let Some((_, dest, _)) = best else { continue };
-        mesh.positions[v as usize] = p.lerp(dest, blend);
+        best.map(|(_, dest)| (v, p.lerp(dest, blend)))
+    };
+    const PARALLEL_ABOVE: usize = 512;
+    let positions: Vec<_> = if affected.len() >= PARALLEL_ABOVE {
+        affected.par_iter().filter_map(project).collect()
+    } else {
+        affected.iter().filter_map(project).collect()
+    };
+    let mut moved = Vec::with_capacity(positions.len());
+    for (v, position) in positions {
+        mesh.positions[v as usize] = position;
         moved.push(v);
     }
-    if !moved.is_empty() {
-        mesh.update_after_move(&moved);
-    }
+    mesh.update_after_move(&moved);
 }
 
 /// Apply one dab. `settings.kind` selects the kernel (callers override it
