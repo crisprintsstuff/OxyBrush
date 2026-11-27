@@ -1107,8 +1107,19 @@ pub fn material_texture(ctx: &egui::Context, m: oxy_render::MatcapPreset) -> egu
 
 pub enum TilePreview<'a> {
     Texture(&'a egui::TextureHandle),
+    RotatedTexture(&'a egui::TextureHandle, f32),
     Color(Color32),
     Empty,
+}
+
+pub fn paint_rotated_texture(ui: &Ui, tex: &egui::TextureHandle, rect: Rect, rotation_deg: f32) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0.0, Color32::BLACK);
+    let mut mesh = egui::Mesh::with_texture(tex.id());
+    mesh.add_rect_with_uv(rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // Alpha UV is Y-up, while screen positions are Y-down.
+    mesh.rotate(egui::emath::Rot2::from_angle(-rotation_deg.to_radians()), rect.center());
+    painter.add(Shape::mesh(mesh));
 }
 
 /// A large preview tile (brush, alpha, material) with a caption; click to pick.
@@ -1131,6 +1142,7 @@ pub fn tile(ui: &mut Ui, preview: TilePreview<'_>, caption: &str, tooltip: &str,
                     Color32::WHITE,
                 );
             }
+            TilePreview::RotatedTexture(tex, angle) => paint_rotated_texture(ui, tex, img.shrink(4.0), angle),
             TilePreview::Color(color) => {
                 ui.painter().rect_filled(img.shrink(5.0), 4.0, color);
             }

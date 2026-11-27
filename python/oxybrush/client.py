@@ -378,7 +378,9 @@ class Session:
     def changes(self, since: Optional[int] = None, timeout_ms: int = 0) -> Dict[str, Any]:
         """Events after ``since`` (call without it for the starting cursor).
 
-        Returns ``{"cursor": int, "events": [...], "truncated": bool}``.
+        Returns cursor, events, truncated and the listener's
+        session_origin. Compare each geometry event's origin with
+        session_origin to recognize your own writes.
         With ``timeout_ms`` (up to 10000) the call waits for the next change.
         When ``truncated`` is true, some events were dropped: re-read
         :meth:`scene_state`.
@@ -461,6 +463,7 @@ class Session:
         indices: Sequence[int],
         *,
         topology_version: int,
+        undo_group: Optional[str] = None,
         positions: Optional[Sequence[Sequence[float]]] = None,
         colors: Optional[Sequence[Sequence[float]]] = None,
         mask: Optional[Sequence[float]] = None,
@@ -471,7 +474,8 @@ class Session:
         """Set sparse absolute values in the vertex order from get_geometry.
 
         Each supplied array has one entry per index. Position and RGB
-        entries are triples. One call creates one undo step.
+        entries are triples. Reuse undo_group for consecutive writes
+        that should be undone together.
         """
         patch: Dict[str, Any] = {"indices": [int(v) for v in indices]}
         if positions is not None:
@@ -481,7 +485,7 @@ class Session:
         if mask is not None:
             patch["mask"] = [float(v) for v in mask]
         args: Dict[str, Any] = {"patch": patch, "topology_version": topology_version}
-        for key, value in (("id", id), ("index", index), ("name", name)):
+        for key, value in (("id", id), ("index", index), ("name", name), ("undo_group", undo_group)):
             if value is not None:
                 args[key] = value
         return self.call_tool("patch_geometry", **args)["content"][0]["text"]
@@ -495,6 +499,7 @@ class Session:
         index: Optional[int] = None,
         name: Optional[str] = None,
         topology_version: Optional[int] = None,
+        undo_group: Optional[str] = None,
         fields: Optional[List[str]] = None,
     ) -> str:
         """Write positions, colors and/or mask onto a piece (one undo step).
@@ -503,7 +508,8 @@ class Session:
         :meth:`get_geometry` or built by hand) with optional ``fields``
         (default: every key in ``arrays`` among positions, colors, mask).
         ``topology_version`` refuses a write when the piece's triangles
-        changed since you read them.
+        changed since you read them. Reuse undo_group for consecutive
+        writes that should be undone together.
         """
         import array
         import struct
@@ -572,7 +578,7 @@ class Session:
         if not write_path:
             raise OxyBrushError("set_geometry needs path or arrays")
         args: Dict[str, Any] = {"path": write_path}
-        for key, value in (("id", id), ("index", index), ("name", name), ("topology_version", topo)):
+        for key, value in (("id", id), ("index", index), ("name", name), ("topology_version", topo), ("undo_group", undo_group)):
             if value is not None:
                 args[key] = value
         try:

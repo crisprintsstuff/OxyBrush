@@ -156,3 +156,23 @@ before more pack fillers once Phase 3’s scale slice is solid.
 - Full screen-space stencils, UV paint, or world-locked projection
   (separate work).
 - AI-generated alphas without a clear CC0 dedication and human review.
+
+
+## Direction, tile filtering and image input
+
+The selected alpha rotates in the shelf and inspector. Freehand and
+line strokes with Follow stroke direction or Roll wait for a tangent
+direction before applying the initial dab. Releasing without movement
+stamps at the original position using the camera orientation.
+
+Roll uses the starting radius for repeat pitch while pressure can
+still change the brush width. Tile and Roll filter between the edge
+texels at a repeat seam. Roll repeats along the path and Tile also
+repeats across its width. Recipe version 11 selects this behavior.
+Earlier recipes replay with their original initial dab and filtering.
+
+Load image accepts PNG, JPEG, TIFF, WebP, and 8-bit or 16-bit grayscale
+or RGB PSD composites saved as raw, PackBits or ZIP without
+prediction. Import uses luminance multiplied by opacity and retains
+16-bit values where available. Library entries
+are stored as 16-bit PNGs.

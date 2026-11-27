@@ -286,12 +286,24 @@ impl Change {
     }
 }
 
+/// Allocate a non-secret identity shared by a listener's undo groups and
+/// attributed change events. Each in-app Python invocation has its own.
+pub fn new_edit_origin() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+pub fn is_geometry_write(tool: &str) -> bool {
+    matches!(tool, "set_geometry" | "patch_geometry")
+}
+
 /// Changes since the start of the session, numbered, the most recent
 /// [`ChangeLog::CAPACITY`] kept.
 #[derive(Debug, Default)]
 pub struct ChangeLog {
     next: u64,
-    events: VecDeque<(u64, Change)>,
+    events: VecDeque<(u64, Change, Option<u64>)>,
     last: Option<Snapshot>,
     /// Every event before this one was dropped for space (not merely
     /// replaced by a newer one of the same kind).
@@ -308,6 +320,12 @@ impl ChangeLog {
 
     /// Compare with the last snapshot and log the differences. True if any.
     pub fn observe(&mut self, now: Snapshot) -> bool {
+        self.observe_geometry_write(now, None)
+    }
+
+    /// Attribute geometry events from a completed write to its listener.
+    /// Observe any preceding user changes before applying the write.
+    pub fn observe_geometry_write(&mut self, now: Snapshot, origin: Option<u64>) -> bool {
         let Some(before) = self.last.replace(now.clone()) else { return false };
         if before == now {
             return false;
@@ -350,21 +368,24 @@ impl ChangeLog {
         }
         let any = !changes.is_empty();
         for c in changes {
-            self.push(c);
+            let origin = matches!(c, Change::Geometry { topology: false, .. }).then_some(origin).flatten();
+            self.push(c, origin);
         }
         any
     }
 
-    fn push(&mut self, change: Change) {
+    fn push(&mut self, change: Change, origin: Option<u64>) {
         // Drop an older entry this one makes redundant (a camera drag would
         // otherwise log one event per frame).
-        if let Some(i) = self.events.iter().rposition(|(_, old)| change.supersedes(old)) {
+        if let Some(i) = self.events.iter().rposition(|(_, old, _)| change.supersedes(old))
+            && self.events[i].2 == origin
+        {
             self.events.remove(i);
         }
-        self.events.push_back((self.next, change));
+        self.events.push_back((self.next, change, origin));
         self.next += 1;
         while self.events.len() > Self::CAPACITY {
-            if let Some((seq, _)) = self.events.pop_front() {
+            if let Some((seq, _, _)) = self.events.pop_front() {
                 self.floor = seq + 1;
             }
         }
@@ -378,7 +399,18 @@ impl ChangeLog {
         // A cursor from before events dropped for space (or from the future,
         // e.g. a previous session) means some changes can't be listed.
         let truncated = cursor < self.floor || cursor > self.next;
-        let events = self.events.iter().filter(|(s, _)| *s >= cursor).map(|(s, c)| c.json(*s)).collect();
+        let events = self
+            .events
+            .iter()
+            .filter(|(s, _, _)| *s >= cursor)
+            .map(|(s, c, origin)| {
+                let mut event = c.json(*s);
+                if let Some(origin) = origin {
+                    event["origin"] = (*origin).into();
+                }
+                event
+            })
+            .collect();
         (events, self.next, truncated)
     }
 }
@@ -400,8 +432,12 @@ pub struct SharedChanges {
 
 impl SharedChanges {
     pub fn observe(&self, now: Snapshot) {
+        self.observe_geometry_write(now, None);
+    }
+
+    pub fn observe_geometry_write(&self, now: Snapshot, origin: Option<u64>) {
         let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
-        if log.observe(now) {
+        if log.observe_geometry_write(now, origin) {
             self.ready.notify_all();
         }
     }
@@ -649,6 +685,7 @@ impl GeometryPatch {
         history: &mut oxy_history::History,
         topology_version: u64,
         label_prefix: &str,
+        group: Option<oxy_history::GeometryUndoGroup>,
     ) -> Result<usize, String> {
         let mesh = &mut piece.mesh;
         if topology_version != mesh.topology_version() {
@@ -692,7 +729,7 @@ impl GeometryPatch {
 
         let mut moved = Vec::new();
         let mut dirty = Vec::new();
-        let paint = self.colors.is_some() || mesh.is_painted();
+        let paint = group.is_some() || self.colors.is_some() || mesh.is_painted();
         history.begin_with(format!("{label_prefix}patch geometry"), piece.id, mesh, paint);
         for (vertex, position, color, mask) in &changes {
             let v = *vertex as usize;
@@ -720,7 +757,7 @@ impl GeometryPatch {
         for chunk in dirty {
             mesh.mark_dirty(chunk);
         }
-        history.commit();
+        history.commit_geometry(group);
         Ok(changes.len())
     }
 }

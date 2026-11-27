@@ -42,6 +42,7 @@ pub struct HeadlessSession {
     view: View,
     /// What changed between tool calls, for the `changes` tool.
     changes: crate::state::ChangeLog,
+    origin: u64,
 }
 
 impl HeadlessSession {
@@ -80,6 +81,7 @@ impl HeadlessSession {
             remesh_resolution: 128,
             view,
             changes: crate::state::ChangeLog::default(),
+            origin: crate::state::new_edit_origin(),
         }
     }
 
@@ -151,11 +153,13 @@ impl HeadlessSession {
             // there is never anything to wait for.
             Action::Changes { since, .. } => {
                 let (events, cursor, truncated) = self.changes.since(since);
-                ToolResult::ok(crate::state::changes_json(events, cursor, truncated).to_string())
+                let mut reply = crate::state::changes_json(events, cursor, truncated);
+                reply["session_origin"] = self.origin.into();
+                ToolResult::ok(reply.to_string())
             }
             Action::GetGeometry { id, index, name, fields } => self.get_geometry(id, index, name, fields),
-            Action::SetGeometry { path, id, index, name, topology_version } => {
-                self.set_geometry(&path, id, index, name, topology_version)
+            Action::SetGeometry { path, id, index, name, topology_version, undo_group } => {
+                self.set_geometry(&path, id, index, name, topology_version, undo_group)
             }
             Action::ListStrokes | Action::EditStrokes(_) => ToolResult::error(
                 "living strokes are kept by the desktop app: attach to OxyBrush (oxybrush-cli mcp --attach) to use them",
@@ -166,12 +170,19 @@ impl HeadlessSession {
             Action::GetViewportState | Action::SetViewportImage { .. } | Action::ClearViewportImage => {
                 ToolResult::error("viewport images require the OxyBrush desktop app")
             }
-            Action::PatchGeometry { id, index, name, topology_version, patch } => {
+            Action::PatchGeometry { id, index, name, topology_version, undo_group, patch } => {
                 let index = match self.find_piece(id, index, name.as_deref()) {
                     Ok(index) => index,
                     Err(error) => return ToolResult::error(error),
                 };
-                match patch.apply(&mut self.scene.pieces[index], &mut self.history, topology_version, AGENT_LABEL) {
+                let group = undo_group.map(|name| oxy_history::GeometryUndoGroup { session: self.origin, name });
+                match patch.apply(
+                    &mut self.scene.pieces[index],
+                    &mut self.history,
+                    topology_version,
+                    AGENT_LABEL,
+                    group,
+                ) {
                     Ok(vertices) => ToolResult::ok(format!("Patched {vertices} vertices")),
                     Err(error) => ToolResult::error(error),
                 }
@@ -289,6 +300,7 @@ impl HeadlessSession {
         index: Option<usize>,
         name: Option<String>,
         topology_version: Option<u64>,
+        undo_group: Option<String>,
     ) -> ToolResult {
         let i = match self.find_piece(id, index, name.as_deref()) {
             Ok(i) => i,
@@ -312,7 +324,8 @@ impl HeadlessSession {
                 Ok(w) => w,
                 Err(e) => return ToolResult::error(e),
             };
-        let paint = write.colors.is_some() || piece.mesh.is_painted();
+        let group = undo_group.map(|name| oxy_history::GeometryUndoGroup { session: self.origin, name });
+        let paint = group.is_some() || write.colors.is_some() || piece.mesh.is_painted();
         let summary = write.summary();
         let piece_id = piece.id;
         let piece_name = piece.name.clone();
@@ -325,7 +338,7 @@ impl HeadlessSession {
         }
         match crate::state::apply_geometry_write(&mut piece.mesh, write) {
             Ok(what) => {
-                self.history.commit();
+                self.history.commit_geometry(group);
                 ToolResult::ok(format!("{label} on {piece_name}: wrote {what}"))
             }
             Err(e) => {
@@ -660,7 +673,8 @@ impl Host for HeadlessSession {
             Err(e) => ToolResult::error(e),
         };
         let now = crate::state::Snapshot::of(&self.doc_state());
-        self.changes.observe(now);
+        let origin = (!result.is_error && crate::state::is_geometry_write(name)).then_some(self.origin);
+        self.changes.observe_geometry_write(now, origin);
         result
     }
 }
@@ -728,6 +742,47 @@ mod tests {
         let r = session.call_tool(tool, &args);
         assert!(!r.is_error, "{tool}: {}", r.text);
         serde_json::from_str(&r.text).unwrap_or_else(|e| panic!("{tool} reply is not JSON ({e}): {}", r.text))
+    }
+
+    #[test]
+    fn consecutive_geometry_writes_share_undo_and_keep_distinct_origins() {
+        let mut session = small();
+        let topo = session.scene.active().mesh.topology_version();
+        let before = session.scene.active().mesh.to_data();
+        let own = session.origin;
+        let initial = json(&mut session, "changes", serde_json::json!({}));
+        assert_eq!(initial["session_origin"], own);
+        let patch = |fields: serde_json::Value| {
+            let mut values = fields;
+            values["indices"] = serde_json::json!([0]);
+            serde_json::json!({"patch": values, "topology_version": topo, "undo_group": "session edit"})
+        };
+        let mask = patch(serde_json::json!({"mask":[0.5]}));
+        let color = patch(serde_json::json!({"colors":[[0.2,0.3,0.4]]}));
+        assert!(!session.call_tool("patch_geometry", &mask).is_error);
+        let after_mask = session.history.revision();
+        assert!(!session.call_tool("patch_geometry", &color).is_error);
+        assert!(session.history.revision() > after_mask);
+        assert_eq!(session.history.undo_labels().count(), 1);
+        let after_color = session.scene.active().mesh.to_data();
+
+        let another = crate::state::new_edit_origin();
+        session.origin = another;
+        let displacement = patch(serde_json::json!({"positions":[[0.0,0.0,2.0]]}));
+        assert!(!session.call_tool("patch_geometry", &displacement).is_error);
+        assert_eq!(session.history.undo_labels().count(), 2);
+        let changes = json(&mut session, "changes", serde_json::json!({"since":initial["cursor"]}));
+        assert_eq!(changes["session_origin"], another);
+        let origins: Vec<_> =
+            changes["events"].as_array().unwrap().iter().filter_map(|e| e["origin"].as_u64()).collect();
+        assert_eq!(origins, [own, another]);
+
+        assert!(!session.call_tool("undo", &serde_json::json!({})).is_error);
+        assert_eq!(session.scene.active().mesh.to_data(), after_color);
+        assert!(!session.call_tool("undo", &serde_json::json!({})).is_error);
+        assert_eq!(session.scene.active().mesh.to_data(), before);
+        assert!(!session.call_tool("redo", &serde_json::json!({})).is_error);
+        assert_eq!(session.scene.active().mesh.to_data(), after_color);
     }
 
     #[test]

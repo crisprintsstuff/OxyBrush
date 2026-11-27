@@ -142,6 +142,58 @@ pub fn encode(s: &str) -> String {
     out
 }
 
+mod alpha_psd;
+
+/// Load an alpha from PNG, JPEG, TIFF, WebP or a composite PSD.
+/// Preserve native 16-bit luminance and multiply it by image opacity.
+pub fn load_alpha_image(path: &std::path::Path) -> Result<oxy_sculpt::Alpha, String> {
+    use image::ImageDecoder;
+    use std::io::BufRead;
+
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut reader = io::BufReader::new(file);
+    let sig = reader.fill_buf().map_err(|e| e.to_string())?;
+    let name = path.file_stem().map_or("Alpha".into(), |name| name.to_string_lossy().into_owned());
+    if sig.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return load_alpha_png(path);
+    }
+    if sig.starts_with(b"8BPS") {
+        return alpha_psd::read(reader, name);
+    }
+    let mut reader = image::ImageReader::new(reader).with_guessed_format().map_err(|e| e.to_string())?;
+    if !matches!(reader.format(), Some(image::ImageFormat::Jpeg | image::ImageFormat::Tiff | image::ImageFormat::WebP))
+    {
+        return Err("expected a PNG, JPEG, TIFF, WebP or composite PSD image".into());
+    }
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(256 << 20);
+    reader.limits(limits);
+    let decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+    let (w, h) = decoder.dimensions();
+    alpha_dimensions(w as usize, h as usize)?;
+    let rgba = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?.into_rgba16();
+    let luma: Vec<_> = rgba.pixels().map(|p| alpha_luma16(&p.0)).collect();
+    oxy_sculpt::Alpha::from_luma16(name, w, h, &luma).ok_or_else(|| "empty image".into())
+}
+
+fn alpha_dimensions(w: usize, h: usize) -> Result<(), String> {
+    if w == 0 || h == 0 || w.checked_mul(h).is_none_or(|pixels| pixels > 32 * 1024 * 1024) {
+        return Err("alpha dimensions must be nonzero and at most 32 megapixels".into());
+    }
+    Ok(())
+}
+
+fn alpha_luma16(channels: &[u16]) -> u16 {
+    let mul_alpha = |value: u16, alpha: u16| ((u32::from(value) * u32::from(alpha)) / 65535) as u16;
+    match *channels {
+        [l] => l,
+        [l, a] => mul_alpha(l, a),
+        [r, g, b] => luminance16(r, g, b),
+        [r, g, b, a] => mul_alpha(luminance16(r, g, b), a),
+        _ => unreachable!("supported alpha pixels have 1 through 4 channels"),
+    }
+}
+
 /// Load a PNG as a brush alpha (luminance; transparent pixels count as black).
 /// Supports both 8-bit and 16-bit PNGs (preserving 16-bit depth).
 pub fn load_alpha_png(path: &std::path::Path) -> Result<oxy_sculpt::Alpha, String> {
@@ -336,6 +388,51 @@ mod tests {
         assert!(url.starts_with("https://github.com/crisprintsstuff/OxyBrush/issues/new?template=bug_report.yml"));
         assert!(url.contains("&gpu=Test%20GPU%20%28Vulkan%29"));
         assert!(info.text().contains("GPU: Test GPU (Vulkan)"));
+    }
+
+    #[test]
+    fn decodes_common_alpha_images_and_preserves_composite_depth() {
+        use image::{DynamicImage, ImageBuffer, ImageFormat, Luma, Rgba};
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-formats-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let jpeg = dir.join("Opaque.jpg");
+        let jpg = Rgba([190, 190, 190, 255]);
+        DynamicImage::ImageRgb8(ImageBuffer::from_pixel(8, 8, image::Rgb([jpg[0], jpg[1], jpg[2]])))
+            .save_with_format(&jpeg, ImageFormat::Jpeg)
+            .unwrap();
+        let decoded = load_alpha_image(&jpeg).unwrap();
+        assert!((decoded.data[0] - 190.0 / 255.0).abs() < 0.025);
+
+        let tiff = dir.join("Full-depth.tif");
+        let px = Luma([26_901_u16]);
+        DynamicImage::ImageLuma16(ImageBuffer::from_pixel(8, 8, px))
+            .save_with_format(&tiff, ImageFormat::Tiff)
+            .unwrap();
+        let decoded = load_alpha_image(&tiff).unwrap();
+        assert_eq!(oxy_sculpt::Alpha::quantize_u16(decoded.data[0]), px[0]);
+
+        let webp = dir.join("Transparent.webp");
+        let row = |x, _| if x < 4 { Rgba([255, 255, 255, 0]) } else { Rgba([255, 255, 255, 255]) };
+        DynamicImage::ImageRgba8(ImageBuffer::from_fn(8, 8, row)).save_with_format(&webp, ImageFormat::WebP).unwrap();
+        let decoded = load_alpha_image(&webp).unwrap();
+        assert_eq!(decoded.data[0], 0.0);
+        assert_eq!(decoded.data[decoded.size as usize - 1], 1.0);
+
+        // A minimal 2 × 2 PSD with a raw 16-bit grayscale composite.
+        let psd = dir.join("Composite.psd");
+        let mut bytes = b"8BPS".to_vec();
+        bytes.extend([0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+        bytes.extend(2_u32.to_be_bytes());
+        bytes.extend(2_u32.to_be_bytes());
+        bytes.extend([0, 16, 0, 1]); // depth and grayscale mode
+        bytes.extend([0; 14]); // empty metadata sections and raw compression
+        for value in [26_901_u16, 26_902, 26_903, 26_904] {
+            bytes.extend(value.to_be_bytes());
+        }
+        std::fs::write(&psd, bytes).unwrap();
+        let decoded = load_alpha_image(&psd).unwrap();
+        assert_eq!(oxy_sculpt::Alpha::quantize_u16(decoded.data[0]), 26_901);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

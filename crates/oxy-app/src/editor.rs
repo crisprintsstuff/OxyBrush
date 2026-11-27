@@ -1547,6 +1547,7 @@ pub struct Editor {
     /// The prefix for the undo steps of the MCP call being applied: "Agent: ",
     /// or "Plugin: <name>: " for a Python plugin (set by its listener).
     pub agent_label: String,
+    pub(crate) agent_origin: u64,
     /// How glTF/GLB exports are compressed (File menu, Preferences > General).
     pub gltf_compression: oxy_io::GltfCompression,
     /// File type Export proposes. Native macOS save panels (as rfd opens
@@ -1861,6 +1862,7 @@ impl Default for Editor {
             agent_token: String::new(),
             agent_connected: false,
             agent_label: oxy_mcp::AGENT_LABEL.to_owned(),
+            agent_origin: 0,
             gltf_compression: oxy_io::GltfCompression::None,
             export_format: ExportFormat::default(),
             plugin_running: None,
@@ -3268,6 +3270,13 @@ impl Editor {
 
     /// End a stroke: one undo step, either the usual chunk snapshots or,
     /// when dynamic detail changed the mesh, the whole mesh before it.
+    fn finish_stroke_dab(&mut self, stroke: &mut Stroke) {
+        let doc = &mut self.documents[self.active_document];
+        if let Some(piece) = doc.scene.try_active_mut() {
+            stroke.finish(&mut piece.mesh, &mut |mesh, chunk| doc.history.touch(mesh, chunk));
+        }
+    }
+
     fn finish_stroke(
         &mut self,
         kind: BrushKind,
@@ -4516,6 +4525,7 @@ impl Editor {
         self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { mut stroke, dyn_topo, hold, .. } => {
+                self.finish_stroke_dab(&mut stroke);
                 let recipe = stroke.take_recipe();
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
@@ -4684,6 +4694,7 @@ impl Editor {
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { mut stroke, dyn_topo, hold, .. } => {
+                self.finish_stroke_dab(&mut stroke);
                 let recipe = stroke.take_recipe();
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
@@ -5075,6 +5086,7 @@ impl Editor {
         for s in samples {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
         }
+        stroke.finish(&mut piece.mesh, &mut |m, c| history.touch(m, c));
         let recipe = stroke.take_recipe();
         self.commit_living_stroke(kind, recipe);
     }
@@ -7315,6 +7327,7 @@ impl Editor {
         if self.hold_to_curve_ask {
             // Ask first; the stroke stays as drawn until the answer. Keep
             // what was drawn so answering "no" can still record a recipe.
+            self.finish_stroke_dab(&mut stroke);
             h.recipe = stroke.take_recipe();
             self.hold_offer = Some(h);
             self.status = "Edit this stroke as a curve? Enter: yes, Esc: no".into();
@@ -7455,6 +7468,7 @@ impl Editor {
             stroke.set_modulation(size, strength);
             stroke.add_sample(&mut c.preview, s, &mut |_, chunk| touched[chunk as usize] = true);
         }
+        stroke.finish(&mut c.preview, &mut |_, chunk| touched[chunk as usize] = true);
         c.touched = touched.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| i as u32).collect();
         c.built = Some(key);
     }
@@ -7582,6 +7596,7 @@ impl Editor {
             stroke.set_modulation(size, strength);
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
         }
+        stroke.finish(&mut piece.mesh, &mut |m, chunk| history.touch(m, chunk));
         let recipe = stroke.take_recipe();
         self.commit_living_stroke(c.kind, recipe);
         self.status = format!("Applied curve stroke ({})", c.kind.label());
@@ -11737,6 +11752,24 @@ mod tests {
             let real = oxy_topo::voxel_remesh(&[&e.scene.active().mesh], opts).unwrap().triangle_count() as f32;
             assert!((estimate / real - 1.0).abs() < 0.15, "res {res}: estimate {estimate}, real {real}");
         }
+    }
+
+    #[test]
+    fn a_click_with_a_directional_alpha_stamps_on_release() {
+        let mut e = editor();
+        e.alpha = e.alphas.iter().position(|alpha| alpha.name == "Stripes");
+        assert!(e.alpha.is_some());
+        e.alpha_follow_stroke = true;
+        e.alpha_rotation_deg = 45.0;
+        e.symmetry = Symmetry::default();
+        center(&mut e);
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer_down(PointerButton::Primary);
+        assert_eq!(e.scene.active().mesh.positions, before);
+        e.pointer_released();
+        assert_ne!(e.scene.active().mesh.positions, before);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
     }
 
     #[test]
