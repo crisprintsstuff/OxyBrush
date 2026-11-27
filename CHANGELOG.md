@@ -18,6 +18,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Mask and selection shapes** ([#623](https://github.com/crisprintsstuff/OxyBrush/issues/623)). The bottom brush shelf arranges shape buttons vertically in two compact columns.
+- **Smooth brush** ([#624](https://github.com/crisprintsstuff/OxyBrush/issues/624)). Smooth, Shift Smooth, and auto-smooth follow the original polygon edges when available. Hidden triangulation diagonals no longer pull quad grids sideways.
 - **Windows startup** ([#577](https://github.com/crisprintsstuff/OxyBrush/issues/577)). Use Direct3D 12 on the reported Intel UHD Graphics 600 adapter to avoid a startup crash in the Intel Vulkan driver.
 - **Pen pressure** ([#581](https://github.com/crisprintsstuff/OxyBrush/issues/581)). Preserve light pen readings at stroke start and carry the last measured force through missing samples to avoid sudden full-size or full-strength dabs.
 - **Scene Project** ([#612](https://github.com/crisprintsstuff/OxyBrush/issues/612)). Reuse a ray index throughout the stamp gesture and compute large Stamp previews on a worker. The previous preview stays visible while the next one computes.

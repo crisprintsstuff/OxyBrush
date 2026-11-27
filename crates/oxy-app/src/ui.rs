@@ -3587,8 +3587,9 @@ fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
         return;
     }
     use crate::editor::CutterShape;
-    let mut buttons = |ui: &mut Ui| {
-        if cut_brush
+    let shapes = selection_shapes();
+    let mut buttons = |ui: &mut Ui, shapes: &[(crate::editor::SelectShape, &str)], line: bool| {
+        if line
             && widgets::icon_button(
                 ui,
                 Icon::CutLine,
@@ -3601,7 +3602,7 @@ fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
             ed.cut_shape = CutterShape::Line;
             ed.select_curve = None;
         }
-        for (shape, description) in selection_shapes() {
+        for &(shape, description) in shapes {
             let tip = format!("{}: {description}", shape.label());
             let selected =
                 if cut_brush { ed.cut_shape == CutterShape::Shape(shape) } else { ed.selection_shape == shape };
@@ -3615,10 +3616,18 @@ fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     };
-    if ed.narrow_shelf && ed.shelf != ShelfPosition::Bottom {
-        ui.vertical_centered(buttons);
+    if ed.shelf == ShelfPosition::Bottom {
+        // Three full-sized buttons fit the height of the bottom shelf,
+        // including in Touch. Fill down before starting the next column.
+        let split = 3 - usize::from(cut_brush);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| buttons(ui, &shapes[..split], cut_brush));
+            ui.vertical(|ui| buttons(ui, &shapes[split..], false));
+        });
+    } else if ed.narrow_shelf {
+        ui.vertical_centered(|ui| buttons(ui, &shapes, cut_brush));
     } else {
-        ui.horizontal_wrapped(|ui| buttons(ui));
+        ui.horizontal_wrapped(|ui| buttons(ui, &shapes, cut_brush));
     }
 }
 
@@ -9508,6 +9517,51 @@ mod tests {
             let lasso_button = widgets_labelled(&mut ed, &ctx, &lasso)[0].center();
             click_at(&mut ed, &ctx, lasso_button);
             assert_eq!(ed.selection_shape, SelectShape::Lasso);
+        }
+    }
+
+    #[test]
+    fn bottom_shelf_shapes_fit_in_vertical_columns() {
+        for layout in UiLayout::ALL {
+            let mut ed = Editor::default();
+            ed.show_welcome = false;
+            ed.shelf = ShelfPosition::Bottom;
+            ed.layout = layout;
+            ed.touch_modifiers.ctrl = true;
+            let ctx = egui::Context::default();
+            test_apply_theme(&ctx, false, 1.0, layout);
+            for (shift, brush) in [(false, BrushKind::Draw), (true, BrushKind::Draw), (false, BrushKind::PlaneClip)] {
+                ed.touch_modifiers.shift = shift;
+                ed.brush_kind = brush;
+                ed.selection_shape = crate::editor::SelectShape::Rectangle;
+                ed.cut_shape = crate::editor::CutterShape::Line;
+                let mut rects = Vec::new();
+                if brush.is_curve_cut() {
+                    rects.extend(widgets_labelled(
+                        &mut ed,
+                        &ctx,
+                        "Line: Drag a straight cutting line. Hold Alt to flip the side.",
+                    ));
+                }
+                for (shape, description) in selection_shapes() {
+                    let label = format!("{}: {description}", shape.label());
+                    let matches = widgets_labelled(&mut ed, &ctx, &label);
+                    assert_eq!(matches.len(), 1, "{layout:?} {label}");
+                    rects.push(matches[0]);
+                }
+                assert!((rects[0].left() - rects[2].left()).abs() < 0.1);
+                assert!(rects[0].bottom() <= rects[1].top() && rects[1].bottom() <= rects[2].top());
+                assert!(rects[0].right() <= rects[3].left());
+                assert!((rects[0].top() - rects[3].top()).abs() < 0.1);
+                assert!(rects.iter().all(|rect| rect.bottom() < 900.0), "{layout:?}: {rects:?}");
+
+                click_at(&mut ed, &ctx, rects.last().unwrap().center());
+                if brush.is_curve_cut() {
+                    assert_eq!(ed.cut_shape, crate::editor::CutterShape::Shape(crate::editor::SelectShape::Curve));
+                } else {
+                    assert_eq!(ed.selection_shape, crate::editor::SelectShape::Curve);
+                }
+            }
         }
     }
 

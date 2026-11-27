@@ -777,6 +777,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             also_paint: ed.brush_also_paints(kind),
             rgb_strength: ed.brush_rgb_override(kind).filter(|_| ed.brush_also_paints(kind)),
             auto_smooth: ed.auto_smooth,
+            legacy_triangle_smooth: false,
             gravity: ed.gravity(kind),
             spray: ed.spray,
             noise_scale: ed.noise_scale,

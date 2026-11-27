@@ -385,6 +385,8 @@ pub struct BrushSettings {
     pub rgb_strength: Option<f32>,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
+    /// Preserve how older stroke recipes smoothed across triangulation edges.
+    pub legacy_triangle_smooth: bool,
     /// Gravity: the surface under the brush also sags downward (world -Y)
     /// as the stroke goes, 0..=1, for draping and hanging folds. At 1 one
     /// full-pressure pass sags the middle of the stroke about one brush
@@ -446,6 +448,7 @@ impl Default for BrushSettings {
             also_paint: false,
             rgb_strength: None,
             auto_smooth: 0.0,
+            legacy_triangle_smooth: false,
             gravity: 0.0,
             spray: 0.0,
             noise_scale: 3.0,
@@ -2068,11 +2071,15 @@ fn target_positions(
                 BrushKind::Draw => p + area_normal * (sign * amount * w),
                 BrushKind::Inflate => p + mesh.normals[v as usize] * (sign * amount * w),
                 BrushKind::Smooth => {
-                    let n = mesh.neighbors(v);
-                    if n.is_empty() {
+                    // Including tessellation diagonals pulls a quad grid
+                    // toward whichever corners were chosen for triangulation.
+                    let neighbors =
+                        if settings.legacy_triangle_smooth { mesh.neighbors(v) } else { mesh.polygon_neighbors(v) };
+                    if neighbors.is_empty() {
                         p
                     } else {
-                        let avg = n.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
+                        let avg = neighbors.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>()
+                            / neighbors.len() as f32;
                         p.lerp(avg, (w * dab.strength).min(1.0))
                     }
                 }
@@ -3160,6 +3167,40 @@ mod tests {
         let position = mesh.positions[top as usize];
         s.add_sample(&mut mesh, StrokeSample { position, normal: Vec3::Y, pressure: 1.0 }, &mut |_, _| {});
         assert!(mesh.positions[top as usize].length() < 1.4);
+    }
+
+    #[test]
+    fn smooth_does_not_pull_a_regular_grid_toward_a_triangulation_diagonal() {
+        let positions = (-1..=1).flat_map(|y| (-1..=1).map(move |x| Vec3::new(x as f32, y as f32, 0.0))).collect();
+        let triangles = vec![[0, 1, 4], [0, 4, 3], [1, 2, 5], [1, 5, 4], [3, 4, 7], [3, 7, 6], [4, 5, 7], [5, 8, 7]];
+        let mut mesh = Mesh::new(positions, triangles);
+        let mut remap = [0; 9];
+        for (i, &source) in mesh.source_vertices().iter().enumerate() {
+            remap[source as usize] = i as u32;
+        }
+        let center = remap[4] as usize;
+        let settings = BrushSettings { kind: BrushKind::Smooth, radius: 0.75, strength: 1.0, ..Default::default() };
+        let sample = StrokeSample { position: Vec3::ZERO, normal: Vec3::Z, pressure: 1.0 };
+        let smooth = |mesh: &mut Mesh| {
+            Stroke::new(settings, Symmetry::default(), false).stamp(mesh, sample, 1, &mut |_, _| {});
+        };
+        let mut unmarked = mesh.clone();
+        smooth(&mut unmarked);
+        assert!(unmarked.positions[center].length() > 0.1, "triangle meshes still average every real edge");
+
+        mesh.set_quad_diagonals(
+            [[0, 4], [1, 5], [3, 7], [5, 7]]
+                .into_iter()
+                .map(|edge| {
+                    let [a, b] = edge.map(|v| remap[v]);
+                    [a.min(b), a.max(b)]
+                })
+                .collect(),
+        );
+        mesh.set_ngon_edges(Default::default());
+        let before = mesh.positions.clone();
+        smooth(&mut mesh);
+        assert_eq!(mesh.positions, before);
     }
 
     #[test]
