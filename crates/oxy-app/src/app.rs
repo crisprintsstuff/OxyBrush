@@ -543,17 +543,40 @@ impl App {
             self.editor.native_menu_bar = true;
         }
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
-            event_loop.owned_display_handle(),
-        )));
-        let surface = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-            apply_limit_buckets: false,
-        }))
-        .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
+        let select_adapter = |backends| {
+            let mut desc =
+                wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(event_loop.owned_display_handle()));
+            if let Some(backends) = backends {
+                desc.backends = backends;
+            }
+            let instance = wgpu::Instance::new(desc);
+            let surface = instance.create_surface(window.clone()).map_err(|e| e.to_string())?;
+            let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+                apply_limit_buckets: false,
+            }))
+            .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
+            Ok::<_, String>((surface, adapter))
+        };
+        let (surface, adapter) = select_adapter(None)?;
+        let candidate = adapter.get_info();
+        let (surface, adapter) = if cfg!(target_os = "windows")
+            && needs_intel_dx12(
+                candidate.backend,
+                candidate.vendor,
+                candidate.device,
+                std::env::var_os("WGPU_BACKEND").is_some(),
+            ) {
+            log::warn!("Using Direct3D 12 for Intel UHD Graphics 600 to avoid a reported Vulkan startup crash");
+            drop(surface);
+            drop(adapter);
+            select_adapter(Some(wgpu::Backends::DX12))
+                .map_err(|e| format!("could not start in Direct3D 12 compatibility mode: {e}"))?
+        } else {
+            (surface, adapter)
+        };
         let info = adapter.get_info();
         log::info!("GPU adapter: {info:?}");
         let si = &mut self.editor.system_info;
@@ -1791,8 +1814,8 @@ impl ApplicationHandler for App {
         self.persist_settings(false);
         // Wake up regularly to finish background jobs, pending settings,
         // autosave and a waiting agent even when the window is idle.
-        let mut wait = if self.editor.deform_busy() {
-            // A deform preview is catching up: look for it often.
+        let mut wait = if self.editor.deform_busy() || self.editor.scene_stamp_busy() {
+            // A deform or stamp preview is catching up: look for it often.
             Duration::from_millis(15)
         } else if self.editor.documents.iter().any(|d| d.job.is_some())
             || self.shot_reply.is_some()
@@ -2078,7 +2101,7 @@ impl ApplicationHandler for App {
                         ElementState::Released
                             if self.editor.part_placement.as_ref().is_some_and(|p| p.moving.is_none())
                                 && (b != PointerButton::Primary || self.egui_ctx.is_pointer_over_egui()) => {}
-                        ElementState::Released => self.editor.pointer_up(),
+                        ElementState::Released => self.editor.pointer_released(),
                         _ => {}
                     }
                 }
@@ -2165,7 +2188,7 @@ impl ApplicationHandler for App {
                             self.touch_two_finger_start = None;
                             self.touch_prev_dist = None;
                             self.touch_prev_mid = None;
-                            self.editor.pointer_up();
+                            self.editor.pointer_released();
                         }
                     }
                 }
@@ -2463,6 +2486,12 @@ fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
     ed.window_geometry = Some(g);
 }
 
+/// The #577 report reaches Vulkan adapter selection, then faults inside
+/// Intel's user-mode driver. Switch before requesting the device.
+fn needs_intel_dx12(backend: wgpu::Backend, vendor: u32, device: u32, explicit_backend: bool) -> bool {
+    !explicit_backend && backend == wgpu::Backend::Vulkan && vendor == 0x8086 && device == 0x3185
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2473,6 +2502,15 @@ mod tests {
     use winit::dpi::PhysicalSize;
     use winit::event::ElementState::{Pressed, Released};
     use winit::keyboard::{KeyCode, PhysicalKey};
+
+    #[test]
+    fn windows_compatibility_matches_the_reported_adapter_and_respects_an_override() {
+        use wgpu::Backend::{Dx12, Vulkan};
+        assert!(super::needs_intel_dx12(Vulkan, 0x8086, 0x3185, false));
+        assert!(!super::needs_intel_dx12(Vulkan, 0x8086, 0x3185, true));
+        assert!(!super::needs_intel_dx12(Dx12, 0x8086, 0x3185, false));
+        assert!(!super::needs_intel_dx12(Vulkan, 0x8086, 0x4680, false));
+    }
 
     #[test]
     fn pen_press_starts_at_the_fresh_pressure_and_regular_mouse_at_full() {

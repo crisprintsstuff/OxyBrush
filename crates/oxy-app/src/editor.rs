@@ -88,6 +88,9 @@ pub struct Modifiers {
 /// used to be, raised a tenth).
 pub const STAMP_REPEATS: u32 = 6;
 
+mod scene_stamp;
+use scene_stamp::SceneStamp;
+
 /// How a primary-button drag on the model applies the brush.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StrokeMode {
@@ -894,6 +897,7 @@ pub enum Drag {
         invert: bool,
         start: Vec2,
         scene_targets: Option<Arc<oxy_sculpt::SceneProjectTargets>>,
+        scene_stamp: Option<Box<SceneStamp>>,
     },
     /// Dragging a transform gizmo handle.
     Gizmo(Box<GizmoDrag>),
@@ -1136,6 +1140,20 @@ pub enum JobResult {
         previous: Option<oxy_mesh::multires::Multires>,
         strokes: Option<(u64, u64, crate::living::LevelStrokeRecords)>,
     },
+    /// Pixels read from a local plugin render and tied to its source view.
+    ViewportImage(Box<crate::viewport_image::ViewportImage>),
+    /// The sampled cross section of the retopology source.
+    RetopoContour {
+        surface: u64,
+        generation: u64,
+        revision: u64,
+        ring: Option<Vec<Vec3>>,
+    },
+    /// A Scene Project stamp evaluated on a copy of the original mesh.
+    SceneStamp {
+        source: Box<SceneStamp>,
+        result: Box<scene_stamp::StampResult>,
+    },
     /// A recovered coarse level, ready to install if the source still matches.
     RebuiltLower {
         mesh: Mesh,
@@ -1254,7 +1272,9 @@ pub struct Editor {
     /// A pen (or other pressure source) has reported pressure this session.
     pub pen_seen: bool,
     /// A stamp drag moved since the last frame; `flush_stamp` redraws it once.
+    pub(crate) viewport_image: Option<crate::viewport_image::ViewportImage>,
     stamp_queued: bool,
+    finishing_stamp: Option<scene_stamp::FinishingPreview>,
     /// Pen pressure that already counts as full (0.3..1).
     pub pressure_full: f32,
     /// Two-point shape of the pressure curve: the inner control points of
@@ -1701,7 +1721,9 @@ impl Default for Editor {
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pen_seen: false,
+            viewport_image: None,
             stamp_queued: false,
+            finishing_stamp: None,
             pressure_full: 1.0,
             pressure_shape: LINEAR_PRESSURE_SHAPE,
             pressure_shape_size: LINEAR_PRESSURE_SHAPE,
@@ -3079,7 +3101,16 @@ impl Editor {
             // The same read-only target geometry serves every preview and the final stamp.
             let scene_targets =
                 (mode == StrokeMode::Stamp && kind == BrushKind::SceneProject).then(|| self.scene_project_targets());
-            self.drag = Drag::Deferred { mode, kind, invert, start: p, scene_targets };
+            let scene_stamp = scene_targets.as_ref().and_then(|targets| {
+                let piece = self.scene.active();
+                let dense = piece.mesh.triangle_count() >= scene_stamp::BACKGROUND_TRIANGLES
+                    || self.scene.pieces.iter().any(|p| {
+                        p.id != piece.id && p.visible && p.mesh.triangle_count() >= scene_stamp::BACKGROUND_TRIANGLES
+                    });
+                (!targets.is_empty() && dense)
+                    .then(|| Box::new(SceneStamp::new(piece.id, &piece.mesh, self.history.revision())))
+            });
+            self.drag = Drag::Deferred { mode, kind, invert, start: p, scene_targets, scene_stamp };
             return;
         }
         let radius = self.world_radius(hit.point, self.brush_radius_pt);
@@ -4378,11 +4409,37 @@ impl Editor {
 
     /// Stamp stroke mode: show the stamp for the latest pointer position,
     /// once per frame however many move events arrived.
+    pub fn scene_stamp_busy(&self) -> bool {
+        matches!(&self.drag, Drag::Deferred { scene_stamp: Some(stamp), .. } if stamp.busy())
+    }
+
     fn flush_stamp(&mut self) -> bool {
+        if let Drag::Deferred { scene_stamp: Some(stamp), .. } = &mut self.drag {
+            let changed = stamp.poll();
+            if !self.stamp_queued || stamp.busy() {
+                return changed;
+            }
+            self.stamp_queued = false;
+            let Drag::Deferred { kind, invert, start, scene_targets, .. } = &self.drag else {
+                unreachable!();
+            };
+            let Some(end) = self.pointer else { return changed };
+            let input = self.stamp_input(*kind, *invert, *start, end, false, scene_targets.clone());
+            let Drag::Deferred { scene_stamp: Some(stamp), .. } = &mut self.drag else {
+                unreachable!();
+            };
+            if let Some((stroke, sample)) = input {
+                stamp.submit(stroke, sample);
+            } else {
+                stamp.clear_preview();
+            }
+            return true;
+        }
+
         if !std::mem::take(&mut self.stamp_queued) {
             return false;
         }
-        if let Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start, ref scene_targets } = self.drag
+        if let Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start, ref scene_targets, .. } = self.drag
             && let Some(pos) = self.pointer
         {
             self.apply_stamp(kind, invert, start, pos, false, scene_targets.clone());
@@ -4391,7 +4448,17 @@ impl Editor {
         false
     }
 
+    /// End a gesture before another editor command that needs its result.
     pub fn pointer_up(&mut self) {
+        self.finish_pointer_gesture(false);
+    }
+
+    /// User release allows a costly operation to finish on a worker.
+    pub fn pointer_released(&mut self) {
+        self.finish_pointer_gesture(true);
+    }
+
+    fn finish_pointer_gesture(&mut self, background: bool) {
         if std::mem::take(&mut self.split_dragging) {
             return;
         }
@@ -4401,7 +4468,11 @@ impl Editor {
         if self.select_curve_release() {
             return;
         }
-        self.flush_drag();
+        if matches!(self.drag, Drag::Deferred { scene_stamp: Some(_), .. }) {
+            self.stamp_queued = false;
+        } else {
+            self.flush_drag();
+        }
         self.commit_instancer_edit();
         if self.part_placement.as_ref().is_some_and(|p| p.moving.is_some()) {
             // Move on surface: a click on the model moves the recipe there.
@@ -4428,7 +4499,11 @@ impl Editor {
             }
             return;
         }
-        if self.spheres_pointer_up() || self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
+        if self.spheres_pointer_up()
+            || self.tube_pointer_up()
+            || self.retopo_pointer_up(background)
+            || self.poly_pointer_up()
+        {
             return;
         }
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
@@ -4492,9 +4567,30 @@ impl Editor {
                 self.gizmo_pivot = None;
                 self.status = "Gizmo pivot snapped to surface point".into();
             }
-            Drag::Deferred { mode, kind, invert, start, scene_targets } => {
+            Drag::Deferred { mode, kind, invert, start, scene_targets, scene_stamp } => {
                 if let Some(end) = self.pointer {
-                    if mode == StrokeMode::Stamp {
+                    if let Some(mut stamp) = scene_stamp {
+                        if self.scene.active().id == stamp.piece
+                            && stamp.matches(&self.scene.active().mesh, self.history.revision())
+                            && let Some((stroke, sample)) =
+                                self.stamp_input(kind, invert, start, end, true, scene_targets)
+                        {
+                            if !background || self.documents.iter().any(|d| d.job.is_some()) {
+                                // Commands need a finished stroke; another project can also hold the worker slot.
+                                let result = scene_stamp::StampResult::evaluate(&stamp.base, stroke, sample);
+                                self.status = self.install_scene_stamp(self.active_document, *stamp, result);
+                            } else {
+                                self.finishing_stamp = stamp.take_preview().map(|mesh| scene_stamp::FinishingPreview {
+                                    doc: self.id,
+                                    piece: stamp.piece,
+                                    mesh,
+                                });
+                                self.start_job(kind.label().into(), Vec::new(), move || {
+                                    Ok(stamp.finish(stroke, sample))
+                                });
+                            }
+                        }
+                    } else if mode == StrokeMode::Stamp {
                         self.apply_stamp(kind, invert, start, end, true, scene_targets);
                     } else {
                         self.finish_line(kind, invert, start, end);
@@ -4902,24 +4998,9 @@ impl Editor {
     ) {
         let doc = &mut self.documents[self.active_document];
         doc.history.revert_pending(&mut doc.scene);
-        let click = end.distance(start) < 4.0 * self.pixels_per_point.max(0.1);
-        if click && !commit {
+        let Some((mut stroke, sample)) = self.stamp_input(kind, invert, start, end, commit, scene_targets) else {
             return;
-        }
-        let size = self.canvas_size();
-        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
-        let (o, d) = self.camera.ray(start - origin, size);
-        let Some(hit) = self.scene.active().mesh.raycast(o, d) else { return };
-        let drag = end - start;
-        let (radius_pt, angle) = if click {
-            (self.brush_radius_pt, 0.0)
-        } else {
-            ((drag.length() / self.pixels_per_point).max(4.0), -drag.y.atan2(drag.x))
         };
-        let radius = self.world_radius(hit.point, radius_pt);
-        let mut stroke = self.new_stroke_seeded(kind, invert, radius, angle, None, scene_targets);
-        let sample =
-            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
         let paints = kind == BrushKind::Paint || (kind.supports_also_paint() && self.brush_also_paints(kind));
         if paints {
             self.reveal_vertex_color();
@@ -4933,6 +5014,36 @@ impl Editor {
             let recipe = stroke.take_recipe();
             self.commit_living_stroke(kind, recipe);
         }
+    }
+
+    fn stamp_input(
+        &self,
+        kind: BrushKind,
+        invert: bool,
+        start: Vec2,
+        end: Vec2,
+        commit: bool,
+        scene_targets: Option<Arc<oxy_sculpt::SceneProjectTargets>>,
+    ) -> Option<(Stroke, StrokeSample)> {
+        let click = end.distance(start) < 4.0 * self.pixels_per_point.max(0.1);
+        if click && !commit {
+            return None;
+        }
+        let size = self.canvas_size();
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let (o, d) = self.camera.ray(start - origin, size);
+        let hit = self.scene.active().mesh.raycast(o, d)?;
+        let drag = end - start;
+        let (radius_pt, angle) = if click {
+            (self.brush_radius_pt, 0.0)
+        } else {
+            ((drag.length() / self.pixels_per_point).max(4.0), -drag.y.atan2(drag.x))
+        };
+        let radius = self.world_radius(hit.point, radius_pt);
+        let stroke = self.new_stroke_seeded(kind, invert, radius, angle, None, scene_targets);
+        let sample =
+            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
+        Some((stroke, sample))
     }
 
     fn finish_line(&mut self, kind: BrushKind, invert: bool, start: Vec2, end: Vec2) {
@@ -7658,6 +7769,13 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        if self.finishing_stamp_piece().is_some() {
+            return self.finishing_stamp.as_mut().map(|p| &mut p.mesh);
+        }
+        if self.scene_stamp_preview_piece().is_some() {
+            let Drag::Deferred { scene_stamp: Some(stamp), .. } = &mut self.drag else { unreachable!() };
+            return stamp.preview();
+        }
         let active = self.active_document;
         let doc = &self.documents[active];
         let others = self.tube.is_some()
@@ -7690,9 +7808,27 @@ impl Editor {
         }
     }
 
-    /// The piece a preview is drawn in place of (an open curve stroke, or
-    /// a plugin's live preview), when the preview looks like the piece.
+    fn scene_stamp_preview_piece(&self) -> Option<u64> {
+        let Drag::Deferred { scene_stamp: Some(stamp), .. } = &self.drag else { return None };
+        let piece = self.scene.try_active()?;
+        (stamp.has_preview() && piece.id == stamp.piece && stamp.matches(&piece.mesh, self.history.revision()))
+            .then_some(piece.id)
+    }
+
+    fn finishing_stamp_piece(&self) -> Option<u64> {
+        let preview = self.finishing_stamp.as_ref()?;
+        let piece = self.scene.try_active()?;
+        (preview.doc == self.id
+            && preview.piece == piece.id
+            && preview.mesh.topology_version() == piece.mesh.topology_version())
+        .then_some(piece.id)
+    }
+
+    /// The piece replaced by a preview that keeps the piece's material.
     pub fn preview_in_place(&self) -> Option<u64> {
+        if let Some(piece) = self.finishing_stamp_piece().or_else(|| self.scene_stamp_preview_piece()) {
+            return Some(piece);
+        }
         if self.tube.is_some() || self.spheres.is_some() || self.primitive_edit.is_some() {
             return None;
         }
@@ -8045,6 +8181,10 @@ impl Editor {
         // An import into an empty scene has nothing active to sculpt until it lands.
         let Some(active) = self.scene.try_active() else { return true };
         job.target == active.id || job.consumed.contains(&active.id)
+    }
+
+    pub(crate) fn job_blocks_piece(&self, piece: u64) -> bool {
+        self.job.as_ref().is_some_and(|job| job.target == piece || job.consumed.contains(&piece))
     }
 
     /// Add a subdivision level on top and switch to it.
@@ -9083,6 +9223,9 @@ impl Editor {
         let job = self.documents[idx].job.take().expect("checked");
         let secs = job.started.elapsed().as_secs_f32();
         let target_doc_id = job.doc_id;
+        if self.finishing_stamp.as_ref().is_some_and(|preview| preview.doc == target_doc_id) {
+            self.finishing_stamp = None;
+        }
         let Some(actual_idx) = self.documents.iter().position(|d| d.id == target_doc_id) else {
             // Tab was closed while job ran: safely discarded
             return true;
@@ -9097,9 +9240,53 @@ impl Editor {
         true
     }
 
+    fn install_scene_stamp(&mut self, doc_idx: usize, source: SceneStamp, result: scene_stamp::StampResult) -> String {
+        let doc = &mut self.documents[doc_idx];
+        let Some(index) = doc.scene.index_of(source.piece) else {
+            return "Scene Project cancelled because the piece was removed".into();
+        };
+        let mesh = &mut doc.scene.pieces[index].mesh;
+        if !source.matches(mesh, doc.history.revision()) {
+            return "Scene Project cancelled because the project changed".into();
+        }
+        let scene_stamp::StampResult { mesh: projected, touched, recipe, paints, .. } = result;
+        if touched.is_empty() {
+            return "Scene Project found no surface to project".into();
+        }
+        let painted = projected.is_painted();
+        doc.history.begin_with(BrushKind::SceneProject.label(), source.piece, mesh, painted || mesh.is_painted());
+        for chunk in touched {
+            doc.history.touch(mesh, chunk);
+        }
+        *mesh = projected;
+        doc.history.commit();
+        let previous = std::mem::replace(&mut self.active_document, doc_idx);
+        self.living_record_for(source.piece, BrushKind::SceneProject, recipe);
+        self.active_document = previous;
+        if paints && doc_idx == previous {
+            self.reveal_vertex_color();
+        }
+        "Scene Project stamp applied".into()
+    }
+
     fn apply_job_result(&mut self, doc_idx: usize, job: Job, result: Result<JobResult, String>, secs: f32) -> String {
         let is_active = doc_idx == self.active_document;
         match result {
+            Ok(JobResult::ViewportImage(image)) => {
+                if is_active && crate::viewport_image::matches(self, &image) {
+                    self.viewport_image = Some(*image);
+                    "Viewport image displayed".into()
+                } else {
+                    "Viewport image failed because the view changed while the file loaded".into()
+                }
+            }
+            Ok(JobResult::RetopoContour { surface, generation, revision, ring }) => {
+                let previous = std::mem::replace(&mut self.active_document, doc_idx);
+                let status = self.retopo_finish_contour(surface, generation, revision, ring);
+                self.active_document = previous;
+                status
+            }
+            Ok(JobResult::SceneStamp { source, result }) => self.install_scene_stamp(doc_idx, *source, *result),
             Ok(JobResult::Relevel { mesh, multires }) => {
                 let doc = &mut self.documents[doc_idx];
                 let Some(index) = doc.scene.index_of(job.target) else {
@@ -14471,6 +14658,54 @@ mod tests {
             panic!("a new gesture should capture current visibility");
         };
         assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn large_scene_project_stamps_preview_without_editing_and_commit_once() {
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Source", primitives::icosphere(6, 1.0)));
+        e.scene.pieces.push(Piece::new("Target", primitives::icosphere(3, 1.15)));
+        e.brush_kind = BrushKind::SceneProject;
+        e.stroke_mode = StrokeMode::Stamp;
+        e.symmetry = Symmetry::default();
+        e.living.enabled = true;
+        let before = e.scene.active().mesh.positions.clone();
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(460.0, 300.0));
+        assert!(e.flush_drag());
+        assert!(e.scene_stamp_busy());
+        assert_eq!(e.scene.active().mesh.positions, before);
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while e.scene_stamp_busy() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+            e.flush_drag();
+        }
+        let preview = e.preview_mesh_mut().unwrap().positions.clone();
+        assert_ne!(preview, before);
+        assert_eq!(e.scene.active().mesh.positions, before);
+        let revision = e.history.revision();
+
+        e.pointer_released();
+        assert!(e.job.is_some());
+        assert_eq!(e.preview_mesh_mut().unwrap().positions, preview);
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.positions, preview);
+        assert!(e.preview_mesh_mut().is_none());
+        assert_ne!(e.history.revision(), revision);
+        assert_eq!(e.living.strokes.len(), 1);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(450.0, 300.0));
+        e.flush_drag();
+        e.cancel_drag();
+        assert!(e.job.is_none());
+        assert!(e.preview_mesh_mut().is_none());
+        assert_eq!(e.scene.active().mesh.positions, before);
     }
 
     /// Draw a curve stroke from left to right across the sphere.

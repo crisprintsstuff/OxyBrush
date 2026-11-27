@@ -25,6 +25,8 @@ use oxy_history::Step;
 use oxy_mesh::Mesh;
 use oxy_mesh::retopo::{Cage, corners};
 
+mod contour;
+
 /// Screen distance (logical points) within which a press picks a point or edge.
 pub const PICK_PT: f32 = 9.0;
 /// How far (logical points) Shift looks for open points to make a face.
@@ -50,6 +52,9 @@ pub struct Retopo {
     pub mirror: bool,
     /// Subdivision levels for "Subdivide and project".
     pub project_levels: u32,
+    pub contour_mode: bool,
+    pub contour_points: usize,
+    pub contour_anchor: Option<contour::Anchor>,
     /// Where each cage vertex is on screen (window px), None when hidden
     /// behind the surface or off screen. Recomputed when the view or the
     /// cage changes.
@@ -80,6 +85,8 @@ pub enum RetopoDrag {
     Shift { start: Vec2, before: Snapshot, relaxing: bool },
     /// Tab+drag on a border edge: the new quad follows the pointer.
     Extend { a: u32, b: u32, start: Vec2 },
+    /// Draw the section plane from a line in the viewport.
+    Contour { start: Vec2 },
 }
 
 /// The cage (and the piece's mesh) before a drag, for its undo step.
@@ -270,6 +277,9 @@ impl Editor {
             relax_radius_pt: 40.0,
             mirror: self.symmetry.x,
             project_levels: 3,
+            contour_mode: false,
+            contour_points: 12,
+            contour_anchor: None,
             screen: Vec::new(),
             view_key: None,
             occluded: Vec::new(),
@@ -288,7 +298,7 @@ impl Editor {
     /// Close the tool. The retopology piece stays in the scene.
     pub fn finish_retopo(&mut self) {
         if matches!(self.drag, Drag::Retopo(_)) {
-            self.retopo_pointer_up();
+            self.retopo_pointer_up(false);
         }
         if let Some(r) = self.retopo.take() {
             if let Some(c) = r.cage_piece.filter(|c| *c != r.surface) {
@@ -854,6 +864,14 @@ impl Editor {
             }
             return true;
         }
+        if self.retopo.as_ref().is_some_and(|r| r.contour_mode) && !m.shift && !m.alt && !self.tab_held {
+            if self.job.is_none() {
+                self.drag = Drag::Retopo(Box::new(RetopoDrag::Contour { start: p }));
+            } else {
+                self.status = "Wait for the running operation to finish".into();
+            }
+            return true;
+        }
         let Some(before) = self.snapshot() else { return true };
         if m.shift {
             self.drag = Drag::Retopo(Box::new(RetopoDrag::Shift { start: p, before, relaxing: false }));
@@ -984,7 +1002,7 @@ impl Editor {
                 self.retopo_relax_at(pos);
                 true
             }
-            RetopoDrag::Extend { .. } => true,
+            RetopoDrag::Extend { .. } | RetopoDrag::Contour { .. } => true,
         }
     }
 
@@ -1103,6 +1121,11 @@ impl Editor {
     /// Undo the last loose point placed before the first face. True if there was one.
     pub(crate) fn retopo_undo_draft_point(&mut self) -> bool {
         let Some(r) = self.retopo.as_mut() else { return false };
+        if r.contour_anchor.as_ref().is_some_and(|anchor| !anchor.attached) {
+            r.contour_anchor = None;
+            self.status = "Undid Retopo: first contour".into();
+            return true;
+        }
         if r.cage_piece.is_some() || r.draft.positions.pop().is_none() {
             return false;
         }
@@ -1116,7 +1139,7 @@ impl Editor {
         let Drag::Retopo(d) = std::mem::replace(&mut self.drag, Drag::None) else { return };
         let before = match *d {
             RetopoDrag::Move { before, .. } | RetopoDrag::Shift { before, .. } => before,
-            RetopoDrag::Extend { .. } => {
+            RetopoDrag::Extend { .. } | RetopoDrag::Contour { .. } => {
                 self.status = "Cancelled".into();
                 return;
             }
@@ -1140,7 +1163,7 @@ impl Editor {
     }
 
     /// Release with the tool open. True if a retopology drag ended.
-    pub(crate) fn retopo_pointer_up(&mut self) -> bool {
+    pub(crate) fn retopo_pointer_up(&mut self, background: bool) -> bool {
         let Drag::Retopo(_) = &self.drag else { return false };
         let Drag::Retopo(d) = std::mem::replace(&mut self.drag, Drag::None) else { unreachable!() };
         let pos = self.pointer;
@@ -1192,6 +1215,13 @@ impl Editor {
                 } else if let Some(p) = pos {
                     self.retopo_make_face(p);
                 }
+            }
+            RetopoDrag::Contour { start } => {
+                if let Some(end) = pos {
+                    self.retopo_cut_contour(start, end, background);
+                }
+                // Only the completed contour operation changes the cage.
+                return true;
             }
             RetopoDrag::Extend { a, b, start } => {
                 let far_enough = pos.is_some_and(|p| p.distance(start) >= CLICK_PT * self.pixels_per_point.max(0.5));
@@ -1337,6 +1367,25 @@ mod tests {
         e.pointer = Some(p);
         e.pointer_down(PointerButton::Primary);
         e.pointer_up();
+    }
+
+    #[test]
+    fn contour_drags_form_a_quad_strip_and_undo_one_cut() {
+        let mut e = editor();
+        e.retopo.as_mut().unwrap().contour_mode = true;
+        let cut = |e: &mut Editor, y| drag(e, Vec2::new(320.0, y), Vec2::new(480.0, y));
+        cut(&mut e, 270.0);
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.retopo.as_ref().unwrap().contour_anchor.as_ref().expect("first ring").points.len(), 12);
+        cut(&mut e, 300.0);
+        assert_eq!(e.retopo_cage().unwrap().quad_count(), 12, "{}", e.status);
+        cut(&mut e, 330.0);
+        assert_eq!(e.retopo_cage().unwrap().quad_count(), 24, "{}", e.status);
+        assert_eq!(e.retopo_cage().unwrap().border_edges().len(), 24);
+        e.undo();
+        assert_eq!(e.retopo_cage().unwrap().quad_count(), 12);
+        e.redo();
+        assert_eq!(e.retopo_cage().unwrap().quad_count(), 24);
     }
 
     /// Press or release Tab the way the app does for a real key event.

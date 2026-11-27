@@ -57,6 +57,7 @@ mod tube;
 mod tube_ui;
 mod ui;
 mod updates;
+mod viewport_image;
 mod wasm_plugins;
 mod widgets;
 

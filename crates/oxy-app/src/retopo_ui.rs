@@ -64,6 +64,17 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             });
             ui.add_space(4.0);
             if let Some(r) = ed.retopo.as_mut() {
+                ui.horizontal(|ui| {
+                    ui.toggle_value(&mut r.contour_mode, "Contour")
+                        .on_hover_text("Drag across a limb, with the line's midpoint on the source. A second cut creates a quad strip between the rings.");
+                    if r.contour_mode {
+                        let changed = ui.add(egui::DragValue::new(&mut r.contour_points).range(4..=48).suffix(" points")).changed();
+                        let new_strip = ui.button("New strip").clicked();
+                        if changed || new_strip {
+                            r.contour_anchor = None;
+                        }
+                    }
+                });
                 egui::Grid::new("retopo_relax").num_columns(2).show(ui, |ui| {
                     ui.label("Relax strength");
                     ui.add(crate::widgets::Bar(egui::Slider::new(&mut r.relax_strength, 0.05..=1.0)));
@@ -85,7 +96,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.end_row();
                     ui.label("Symmetry");
                     ui.checkbox(&mut r.mirror, "Mirror across X").on_hover_text(
-                        "Every point, face, loop, move and delete is mirrored across the piece's X symmetry plane. Points near the plane snap onto it and are shared by both sides.",
+                        "Mirror point and face editing across the piece's X symmetry plane. Points close to the plane are shared by both sides. Contour follows the section you draw.",
                     );
                     ui.end_row();
                 });
@@ -151,6 +162,14 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     let at = |v: u32| r.screen.get(v as usize).copied().flatten().map(to_ui);
     let accent = ed.accent_color();
 
+    if let Some(anchor) = r.contour_anchor.as_ref().filter(|a| !a.attached) {
+        for (&a, &b) in anchor.points.iter().zip(anchor.points.iter().cycle().skip(1)) {
+            if let (Some(a), Some(b)) = (ed.retopo_project(a), ed.retopo_project(b)) {
+                painter.line_segment([to_ui(a), to_ui(b)], Stroke::new(2.0, accent));
+            }
+        }
+    }
+
     for f in &cage.faces {
         let pts: Option<Vec<egui::Pos2>> = corners(f).iter().map(|&v| at(v)).collect();
         if let Some(pts) = pts {
@@ -190,6 +209,11 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     // A drag in progress.
     if let Drag::Retopo(d) = &ed.drag {
         match d.as_ref() {
+            RetopoDrag::Contour { start } => {
+                if let Some(end) = ed.pointer {
+                    painter.line_segment([to_ui(*start), to_ui(end)], Stroke::new(2.0, accent));
+                }
+            }
             RetopoDrag::Extend { a, b, start } => {
                 if let Some((pa, pb)) = ed.retopo_extend_points(*a, *b, *start, pointer) {
                     let pts: Option<Vec<egui::Pos2>> =
