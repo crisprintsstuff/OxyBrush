@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- **Plane Clip** follows the drawn Curve or closed shape, preserving depth as it moves vertices to the cutter boundary. [#638](https://github.com/crisprintsstuff/OxyBrush/issues/638)
+
+### Changed
+
+- **Poly Edit area selection** picks through the piece by default. Use **Front only** to limit Box, Lasso, and Ellipse selections to visible faces, edges, or points. [#636](https://github.com/crisprintsstuff/OxyBrush/issues/636)
+
 ## [4.1.4] - 2026-11-27
 
 ### Added

@@ -4794,26 +4794,23 @@ impl Editor {
             self.status = "Shape too small".into();
             return;
         }
-        self.finish_region_cut(kind, |p| point_in_polygon(p, &poly), self.modifiers.alt, false);
+        self.finish_region_cut(kind, &poly, self.modifiers.alt, false);
     }
 
     /// Apply a projected screen region using the same cutter operations
     /// as the closed shapes. The complement is taken after mirroring.
-    pub(crate) fn finish_region_cut(
-        &mut self,
-        kind: BrushKind,
-        contains: impl Fn(Vec2) -> bool,
-        opposite: bool,
-        curve: bool,
-    ) {
+    pub(crate) fn finish_region_cut(&mut self, kind: BrushKind, outline: &[Vec2], opposite: bool, curve: bool) {
         let camera = self.camera;
         let size = self.canvas_size();
         let center = self.symmetry_center();
         let transforms = self.symmetry.transforms();
-        let in_region = move |p: Vec3| {
+        let contains = |pixel| {
+            if curve { crate::select_shapes::curve_side(outline, pixel) } else { point_in_polygon(pixel, outline) }
+        };
+        let in_region = |p: Vec3| {
             let hit = transforms.iter().any(|t| {
                 let q = center + *t * (p - center);
-                camera.project(q, size).is_some_and(&contains)
+                camera.project(q, size).is_some_and(contains)
             });
             hit != opposite
         };
@@ -4826,12 +4823,11 @@ impl Editor {
         };
         match kind {
             BrushKind::PlaneClip => {
-                let bounds = self.scene.active().mesh.bounds();
-                if bounds.is_empty() {
-                    return;
-                }
-                let plane_point = bounds.center();
-                let plane_normal = -self.camera.forward();
+                let eye = camera.eye();
+                let forward = camera.forward();
+                let up = camera.up();
+                let right = forward.cross(up);
+                let pixel_scale = 2.0 * (camera.fov_y * 0.5).tan() / size.y;
                 let doc = &mut self.documents[self.active_document];
                 let piece = doc.scene.active_mut();
                 doc.history.begin(kind.label(), piece.id, &piece.mesh);
@@ -4839,27 +4835,53 @@ impl Editor {
                     doc.history.touch(&piece.mesh, c);
                 }
                 let mut moved = Vec::new();
-                let n = plane_normal.normalize_or_zero();
-                if n.length_squared() < 1e-4 {
-                    doc.history.cancel();
-                    return;
-                }
                 for i in 0..piece.mesh.vertex_count() {
                     if piece.mesh.is_vertex_hidden(i as u32) {
                         continue;
                     }
                     let p = piece.mesh.positions[i];
-                    if !in_region(p) {
-                        continue;
-                    }
                     let mask = piece.mesh.mask.get(i).copied().unwrap_or(0.0);
                     let w = (1.0 - mask).clamp(0.0, 1.0);
                     if w <= 1e-4 {
                         continue;
                     }
-                    let signed = (p - plane_point).dot(n);
-                    piece.mesh.positions[i] = p - n * (signed * w);
-                    moved.push(i as u32);
+                    let mut nearest: Option<Vec3> = None;
+                    for transform in &transforms {
+                        let q = center + *transform * (p - center);
+                        let Some(pixel) = camera.project(q, size) else { continue };
+                        let (target, inside) = if curve {
+                            let Some(closest) = crate::select_shapes::nearest_on_curve(outline, pixel) else {
+                                continue;
+                            };
+                            closest
+                        } else {
+                            (pixel, contains(pixel))
+                        };
+                        // Alt selects the complement of the union of the copies.
+                        if opposite && inside {
+                            nearest = None;
+                            break;
+                        }
+                        if inside == opposite {
+                            continue;
+                        }
+                        let target =
+                            if curve { target } else { crate::select_shapes::nearest_on_outline(outline, pixel) };
+                        // Move sideways at this vertex's depth, then map the
+                        // displacement back from the symmetry copy.
+                        let delta = target - pixel;
+                        let depth = if camera.orthographic { camera.distance } else { (q - eye).dot(forward) };
+                        let offset = transform.transpose() * (right * delta.x - up * delta.y) * (depth * pixel_scale);
+                        if nearest.is_none_or(|best| offset.length_squared() < best.length_squared()) {
+                            nearest = Some(offset);
+                        }
+                    }
+                    if let Some(offset) = nearest
+                        && offset != Vec3::ZERO
+                    {
+                        piece.mesh.positions[i] = p + offset * w;
+                        moved.push(i as u32);
+                    }
                 }
                 if moved.is_empty() {
                     doc.history.cancel();
@@ -18605,24 +18627,59 @@ Connections: {
     }
 
     #[test]
-    fn shape_cut_rect_plane_clip_flattens_inside() {
-        let mut e = editor();
-        e.canvas = [0.0, 0.0, 800.0, 600.0];
-        e.brush_kind = BrushKind::PlaneClip;
-        e.cut_shape = CutterShape::Shape(SelectShape::Rectangle);
-        let before = e.scene.active().mesh.positions.clone();
+    fn plane_clip_closed_shapes_move_to_the_outline_at_the_original_depth() {
+        use crate::select_shapes::{nearest_on_outline, select_outline};
 
-        e.pointer = Some(Vec2::new(250.0, 200.0));
-        e.pointer_down(PointerButton::Primary);
-        assert!(matches!(e.drag, Drag::ShapeCut { shape: SelectShape::Rectangle, .. }));
-        e.pointer_moved(Vec2::new(550.0, 400.0));
-        e.pointer_up();
-        assert!(matches!(e.drag, Drag::None));
-        assert_ne!(e.scene.active().mesh.positions, before, "vertices inside the rect flatten");
-        assert_eq!(e.scene.active().mesh.vertex_count(), before.len());
+        let a = Vec2::new(325.0, 245.0);
+        let b = Vec2::new(475.0, 355.0);
+        let box_points = [a, b];
+        let lasso_points = [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)];
+        let circle_points = [Vec2::new(400.0, 300.0), Vec2::new(470.0, 300.0)];
+        for (shape, points, opposite) in [
+            (SelectShape::Rectangle, box_points.as_slice(), true),
+            (SelectShape::Lasso, lasso_points.as_slice(), false),
+            (SelectShape::Circle, circle_points.as_slice(), false),
+            (SelectShape::Ellipse, box_points.as_slice(), false),
+        ] {
+            let mut e = editor();
+            e.canvas = [64.0, 48.0, 800.0, 600.0];
+            e.camera.yaw = 0.42;
+            e.camera.pitch = 0.29;
+            e.symmetry = Symmetry::default();
+            e.brush_kind = BrushKind::PlaneClip;
+            e.cut_shape = CutterShape::Shape(shape);
+            let before = e.scene.active().mesh.positions.clone();
+            let origin = Vec2::new(e.canvas[0], e.canvas[1]);
 
-        e.undo();
-        assert_eq!(e.scene.active().mesh.positions, before);
+            e.pointer = Some(points[0] + origin);
+            e.pointer_down(PointerButton::Primary);
+            assert!(matches!(e.drag, Drag::ShapeCut { shape: actual, .. } if actual == shape));
+            for &p in &points[1..] {
+                e.pointer_moved(p + origin);
+            }
+            e.modifiers.alt = opposite;
+            e.pointer_up();
+            assert!(matches!(e.drag, Drag::None));
+            let mesh = &e.scene.active().mesh;
+            assert_eq!(mesh.vertex_count(), before.len());
+            let outline = select_outline(shape, points);
+            let project = |p| e.camera.project(p, e.canvas_size()).unwrap();
+            let mut moved = 0;
+            for (&old, &new) in before.iter().zip(&mesh.positions) {
+                let start = project(old);
+                if point_in_polygon(start, &outline) != opposite {
+                    let expected = nearest_on_outline(&outline, start);
+                    assert!(project(new).distance(expected) < 0.002, "{shape:?}: {:?} vs {expected}", project(new));
+                    assert!((new - old).dot(e.camera.forward()).abs() < 1e-6);
+                    moved += usize::from(new != old);
+                } else {
+                    assert_eq!(old, new);
+                }
+            }
+            assert!(moved > 0, "{shape:?}");
+            e.undo();
+            assert_eq!(e.scene.active().mesh.positions, before);
+        }
     }
 
     #[test]
@@ -18649,6 +18706,16 @@ Connections: {
                 BrushKind::PlaneClip => {
                     assert_ne!(mesh.positions, before.positions);
                     assert_eq!(mesh.triangles, before.triangles);
+                    let project = |p| e.camera.project(p, e.canvas_size()).unwrap();
+                    for (&old, &new) in before.positions.iter().zip(&mesh.positions) {
+                        let (expected, inside) = crate::select_shapes::nearest_on_curve(&points, project(old)).unwrap();
+                        if inside {
+                            assert!(project(new).distance(expected) < 0.002, "{:?} vs {expected}", project(new));
+                            assert!((new - old).dot(e.camera.forward()).abs() < 1e-6);
+                        } else {
+                            assert_eq!(old, new);
+                        }
+                    }
                 }
                 BrushKind::LineSplit => {
                     let project = |p| e.camera.project(p, e.canvas_size()).unwrap();

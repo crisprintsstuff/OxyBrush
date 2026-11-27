@@ -23,6 +23,7 @@ use oxy_mesh::Mesh;
 use oxy_mesh::polyedit::{self, EdgeReach, Reach, Slide, cage_from_mesh};
 use oxy_mesh::polyshape;
 use oxy_mesh::retopo::{Cage, corners, ear_clip, edge_key};
+use std::collections::HashSet;
 
 /// What a click or drag on a face does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +308,8 @@ pub struct PolyEdit {
     pub point_action: PointAction,
     /// Box, Lasso or Ellipse area select (RFC 0035); Off uses click/paint.
     pub area_tool: PolyAreaTool,
+    /// Keep occluded elements out of area selections.
+    pub area_front_only: bool,
     /// Extrude and inset each face on its own instead of as one region.
     pub each: bool,
     /// Blend toward a fitted circle when running To Circle.
@@ -535,6 +538,18 @@ impl PolyGizmoDrag {
     }
 }
 
+fn apply_area_pick<T: Copy + Eq + std::hash::Hash>(pick: &mut Vec<T>, found: Vec<T>, add: bool, subtract: bool) {
+    if subtract {
+        let found: HashSet<_> = found.into_iter().collect();
+        pick.retain(|element| !found.contains(element));
+    } else if add && !pick.is_empty() {
+        let mut seen: HashSet<_> = pick.iter().copied().collect();
+        pick.extend(found.into_iter().filter(|&element| seen.insert(element)));
+    } else {
+        *pick = found;
+    }
+}
+
 impl Editor {
     /// Open the tool on the active piece, making its polygons from its mesh
     /// if it has none yet.
@@ -587,6 +602,7 @@ impl Editor {
             edge_reach: EdgeReach::One,
             point_action: PointAction::Move,
             area_tool: PolyAreaTool::Off,
+            area_front_only: false,
             each: false,
             circle_amount: 1.0,
             mirror: self.symmetry.x,
@@ -1328,18 +1344,20 @@ impl Editor {
             self.status = "Poly Edit: drag a box, lasso or ellipse to select".into();
             return;
         }
-        let mode = self.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
+        let Some(pe) = self.poly_edit.as_ref() else { return };
+        let mode = pe.mode;
+        let front_only = pe.area_front_only;
         if !mode.area_pick() {
             return;
         }
-        let Some(c) = self.poly_cage().cloned() else { return };
+        let Some(c) = self.poly_cage() else { return };
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
         let local: Vec<Vec2> = points.iter().map(|q| *q - origin).collect();
         let outline = crate::select_shapes::select_outline(shape, &local);
         let size = self.canvas_size();
         let camera = self.camera;
         let in_area =
-            |world: Vec3| camera.project(world, size).is_some_and(|s| crate::editor::point_in_polygon(s, &outline));
+            |world: Vec3| camera.project(world, size).filter(|&s| crate::editor::point_in_polygon(s, &outline));
 
         let mut faces = Vec::new();
         let mut edges = Vec::new();
@@ -1347,19 +1365,16 @@ impl Editor {
         match mode {
             ElementMode::Faces => {
                 for f in 0..c.faces.len() {
-                    let at = Self::poly_face_pick_point(&c, f);
-                    if !in_area(at) {
-                        continue;
-                    }
-                    let Some(local) = camera.project(at, size) else { continue };
-                    // Visible: the ray through the pick point hits this face.
-                    if self.poly_raycast_local(local).is_some_and(|(hit, _)| hit == f) {
+                    let at = Self::poly_face_pick_point(c, f);
+                    if let Some(local) = in_area(at)
+                        && (!front_only || self.poly_raycast_local(local).is_some_and(|(hit, _)| hit == f))
+                    {
                         faces.push(f);
                     }
                 }
             }
             ElementMode::Edges => {
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::new();
                 for f in &c.faces {
                     let k = corners(f);
                     for j in 0..k.len() {
@@ -1368,30 +1383,31 @@ impl Editor {
                             continue;
                         }
                         let mid = (c.positions[key[0] as usize] + c.positions[key[1] as usize]) * 0.5;
-                        if !in_area(mid) {
+                        if in_area(mid).is_none() {
                             continue;
                         }
                         let owns = |face: usize| {
                             let kk = corners(&c.faces[face]);
                             (0..kk.len()).any(|i| edge_key(kk[i], kk[(i + 1) % kk.len()]) == key)
                         };
-                        if self.poly_point_visible(mid, owns) {
+                        if !front_only || self.poly_point_visible(mid, owns) {
                             edges.push(key);
                         }
                     }
                 }
             }
             ElementMode::Points => {
-                for v in 0..c.positions.len() as u32 {
-                    if !c.used()[v as usize] {
+                for (v, used) in c.used().into_iter().enumerate() {
+                    if !used {
                         continue;
                     }
-                    let at = c.positions[v as usize];
-                    if !in_area(at) {
+                    let at = c.positions[v];
+                    if in_area(at).is_none() {
                         continue;
                     }
+                    let v = v as u32;
                     let owns = |face: usize| corners(&c.faces[face]).contains(&v);
-                    if self.poly_point_visible(at, owns) {
+                    if !front_only || self.poly_point_visible(at, owns) {
                         points_picked.push(v);
                     }
                 }
@@ -1401,50 +1417,21 @@ impl Editor {
 
         self.poly_pick_begin();
         let Some(pe) = self.poly_edit.as_mut() else { return };
-        if !add && !subtract {
-            pe.selected.clear();
-            pe.picked_edges.clear();
-            pe.picked_points.clear();
-        }
         match mode {
             ElementMode::Faces => {
                 pe.picked_edges.clear();
                 pe.picked_points.clear();
-                if subtract {
-                    pe.selected.retain(|f| !faces.contains(f));
-                } else {
-                    for f in faces {
-                        if !pe.selected.contains(&f) {
-                            pe.selected.push(f);
-                        }
-                    }
-                }
+                apply_area_pick(&mut pe.selected, faces, add, subtract);
             }
             ElementMode::Edges => {
                 pe.selected.clear();
                 pe.picked_points.clear();
-                if subtract {
-                    pe.picked_edges.retain(|e| !edges.contains(e));
-                } else {
-                    for e in edges {
-                        if !pe.picked_edges.contains(&e) {
-                            pe.picked_edges.push(e);
-                        }
-                    }
-                }
+                apply_area_pick(&mut pe.picked_edges, edges, add, subtract);
             }
             ElementMode::Points => {
                 pe.selected.clear();
                 pe.picked_edges.clear();
-                if subtract {
-                    pe.picked_points.retain(|v| !points_picked.contains(v));
-                } else {
-                    for v in points_picked {
-                        if !pe.picked_points.contains(&v) {
-                            pe.picked_points.push(v);
-                        }
-                    }
-                }
+                apply_area_pick(&mut pe.picked_points, points_picked, add, subtract);
             }
             ElementMode::Auto => {}
         }
@@ -4333,17 +4320,24 @@ mod tests {
         e.start_poly_edit();
         e.set_poly_mode(ElementMode::Faces);
         e.set_poly_area_tool(PolyAreaTool::Box);
+        let front = face_towards(&e, Vec3::Z);
+        let back = face_towards(&e, -Vec3::Z);
+        // By default the faces overlap in screen space and both are picked.
+        drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
+        assert_eq!(e.poly_pick_count(), (2, "faces"), "{}", e.status);
+        assert!(e.poly_selection().contains(&front));
+        assert!(e.poly_selection().contains(&back));
+
         // A box covering the middle of the view: the front face only.
+        e.poly_edit.as_mut().unwrap().area_front_only = true;
         drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
         assert_eq!(e.poly_pick_count(), (1, "faces"), "{}", e.status);
-        let front = face_towards(&e, Vec3::Z);
         assert_eq!(e.poly_selection(), &[front]);
         // Esc clears; a tiny click does nothing.
         e.poly_toggle_pick(None);
         drag(&mut e, centre(), centre() + Vec2::splat(2.0));
         assert_eq!(e.poly_pick_count().0, 0);
         // Back face stays out: from the default view it is occluded.
-        let back = face_towards(&e, -Vec3::Z);
         drag(&mut e, centre() - Vec2::splat(200.0), centre() + Vec2::splat(200.0));
         assert!(!e.poly_selection().contains(&back), "occluded back face not picked: {:?}", e.poly_selection());
         assert!(e.poly_selection().contains(&front));
@@ -4363,7 +4357,7 @@ mod tests {
         drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
         e.modifiers.ctrl = false;
         assert_eq!(e.poly_pick_count().0, n);
-        // Alt subtracts the front face away.
+        // Alt subtracts both faces in the region.
         e.modifiers.alt = true;
         drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
         e.modifiers.alt = false;
@@ -4399,6 +4393,7 @@ mod tests {
         e.set_poly_area_tool(PolyAreaTool::Box);
         drag(&mut e, min - Vec2::splat(8.0), max + Vec2::splat(8.0));
         let picked = e.poly_picked_points().to_vec();
+        assert_eq!(picked.len(), 8, "the box also picks back corners");
         assert!(
             corners.iter().all(|v| picked.contains(v)),
             "box: front corners {corners:?} in pick {picked:?}; {}",
@@ -4417,6 +4412,7 @@ mod tests {
         }
         e.pointer_up();
         let picked = e.poly_picked_points().to_vec();
+        assert_eq!(picked.len(), 8, "the lasso also picks back corners");
         assert!(
             corners.iter().all(|v| picked.contains(v)),
             "lasso: front corners {corners:?} in pick {picked:?}; {}",
@@ -4430,6 +4426,7 @@ mod tests {
         e.start_poly_edit();
         e.set_poly_mode(ElementMode::Faces);
         e.set_poly_area_tool(PolyAreaTool::Ellipse);
+        e.poly_edit.as_mut().unwrap().area_front_only = true;
         // Wide ellipse covering the front face.
         drag(&mut e, centre() - Vec2::new(80.0, 40.0), centre() + Vec2::new(80.0, 40.0));
         assert_eq!(e.poly_pick_count(), (1, "faces"), "{}", e.status);
@@ -4450,5 +4447,23 @@ mod tests {
         e.pointer_up();
         e.modifiers.shift = false;
         assert!(e.poly_pick_count().0 >= 1, "{}", e.status);
+    }
+
+    #[test]
+    fn ellipse_area_can_pick_edges_on_both_sides() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.set_poly_mode(ElementMode::Edges);
+        e.set_poly_area_tool(PolyAreaTool::Ellipse);
+        let drag_ellipse = |e: &mut Editor| drag(e, centre() - Vec2::splat(275.0), centre() + Vec2::splat(275.0));
+        drag_ellipse(&mut e);
+        assert_eq!(e.poly_pick_count(), (12, "edges"), "{}", e.status);
+        e.poly_edit.as_mut().unwrap().area_front_only = true;
+        drag_ellipse(&mut e);
+        let back = face_towards(&e, -Vec3::Z);
+        let corners = corners(&cage(&e).faces[back]);
+        for (a, b) in corners.iter().zip(corners.iter().cycle().skip(1)) {
+            assert!(!e.poly_picked_edges().contains(&edge_key(*a, *b)));
+        }
     }
 }

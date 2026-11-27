@@ -101,6 +101,12 @@ fn poly_edit_body(ui: &mut egui::Ui, ed: &mut Editor, subdivide: &mut Option<(u3
                 }
             }
         });
+        if let Some(pe) = &mut ed.poly_edit
+            && pe.area_tool != PolyAreaTool::Off
+        {
+            ui.checkbox(&mut pe.area_front_only, "Front only")
+                .on_hover_text("Limit this area selection to visible elements. Turn off to select through the piece.");
+        }
     }
     // The Knife (#370): draw a cut across the faces.
     let knife = ed.poly_knife_on();
