@@ -951,7 +951,7 @@ pub struct Stroke {
     /// ([`Stroke::with_recording`]).
     log: Option<Vec<RecipeEvent>>,
     /// Other visible pieces for [`BrushKind::SceneProject`] (set by the app).
-    scene_targets: Vec<Mesh>,
+    scene_targets: Option<Arc<[Mesh]>>,
 }
 
 impl Stroke {
@@ -982,15 +982,15 @@ impl Stroke {
             modulation: (1.0, 1.0),
             budget: None,
             strength_scale: 1.0,
-            scene_targets: Vec::new(),
+            scene_targets: None,
         }
     }
 
     /// Meshes to project onto for [`BrushKind::SceneProject`] (other visible
     /// pieces). Empty means the brush has nowhere to land and leaves the
     /// surface alone.
-    pub fn with_scene_targets(mut self, targets: Vec<Mesh>) -> Self {
-        self.scene_targets = targets;
+    pub fn with_scene_targets(mut self, targets: impl Into<Arc<[Mesh]>>) -> Self {
+        self.scene_targets = Some(targets.into());
         self
     }
 
@@ -1417,7 +1417,7 @@ impl Stroke {
                         &self.settings,
                         self.invert,
                         &dab,
-                        &self.scene_targets,
+                        self.scene_targets.as_deref().unwrap_or_default(),
                         alpha.as_ref(),
                         touch,
                     );

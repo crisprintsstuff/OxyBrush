@@ -851,12 +851,13 @@ pub enum Drag {
     },
     /// Dragging a light's marker (Lights window open).
     LightHandle(LightHandle),
-    /// Line / Stamp strokes: nothing changes until release.
+    /// Line strokes and resizable Stamp previews.
     Deferred {
         mode: StrokeMode,
         kind: BrushKind,
         invert: bool,
         start: Vec2,
+        scene_targets: Option<Arc<[Mesh]>>,
     },
     /// Dragging a transform gizmo handle.
     Gizmo(Box<GizmoDrag>),
@@ -3031,7 +3032,10 @@ impl Editor {
             return;
         }
         if mode != StrokeMode::Freehand {
-            self.drag = Drag::Deferred { mode, kind, invert, start: p };
+            // The same read-only target geometry serves every preview and the final stamp.
+            let scene_targets =
+                (mode == StrokeMode::Stamp && kind == BrushKind::SceneProject).then(|| self.scene_project_targets());
+            self.drag = Drag::Deferred { mode, kind, invert, start: p, scene_targets };
             return;
         }
         let radius = self.world_radius(hit.point, self.brush_radius_pt);
@@ -3398,7 +3402,18 @@ impl Editor {
     }
 
     fn new_stroke(&self, kind: BrushKind, invert: bool, radius: f32, extra_rotation: f32) -> Stroke {
-        self.new_stroke_seeded(kind, invert, radius, extra_rotation, None)
+        self.new_stroke_seeded(kind, invert, radius, extra_rotation, None, None)
+    }
+
+    fn scene_project_targets(&self) -> Arc<[Mesh]> {
+        let active = self.scene.active_index();
+        self.scene
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| *i != active && p.visible && p.mesh.triangle_count() > 0)
+            .map(|(_, p)| p.mesh.clone())
+            .collect()
     }
 
     fn new_stroke_seeded(
@@ -3408,6 +3423,7 @@ impl Editor {
         radius: f32,
         extra_rotation: f32,
         paint_seed: Option<u64>,
+        scene_targets: Option<Arc<[Mesh]>>,
     ) -> Stroke {
         let settings = BrushSettings {
             kind,
@@ -3445,18 +3461,6 @@ impl Editor {
                 rotate_jitter_per_dab: self.alpha_rotate_jitter_per_dab,
                 ..AlphaStamp::new(a.clone())
             });
-        let scene_targets = if kind == BrushKind::SceneProject {
-            let active = self.scene.active_index();
-            self.scene
-                .pieces
-                .iter()
-                .enumerate()
-                .filter(|(i, p)| *i != active && p.visible && p.mesh.triangle_count() > 0)
-                .map(|(_, p)| p.mesh.clone())
-                .collect()
-        } else {
-            Vec::new()
-        };
         let rotate_seed = if self.alpha_rotate_jitter_deg > 0.0 { oxy_sculpt::PaintJitter::fresh_seed() } else { 0 };
         let stroke = Stroke::new(settings, self.symmetry, invert)
             .with_symmetry_center(self.symmetry_center())
@@ -3465,8 +3469,12 @@ impl Editor {
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
-            .with_budget(self.dab_budget_ms)
-            .with_scene_targets(scene_targets);
+            .with_budget(self.dab_budget_ms);
+        let stroke = if kind == BrushKind::SceneProject {
+            stroke.with_scene_targets(scene_targets.unwrap_or_else(|| self.scene_project_targets()))
+        } else {
+            stroke
+        };
         let jitter = self.paint_jitter(kind);
         let stroke = if jitter.enabled() {
             stroke.with_paint_jitter(jitter, paint_seed.unwrap_or_else(oxy_sculpt::PaintJitter::fresh_seed))
@@ -4326,10 +4334,10 @@ impl Editor {
         if !std::mem::take(&mut self.stamp_queued) {
             return false;
         }
-        if let Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start } = self.drag
+        if let Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start, ref scene_targets } = self.drag
             && let Some(pos) = self.pointer
         {
-            self.apply_stamp(kind, invert, start, pos, false);
+            self.apply_stamp(kind, invert, start, pos, false, scene_targets.clone());
             return true;
         }
         false
@@ -4435,9 +4443,13 @@ impl Editor {
                 self.gizmo_pivot = None;
                 self.status = "Gizmo pivot snapped to surface point".into();
             }
-            Drag::Deferred { mode, kind, invert, start } => {
+            Drag::Deferred { mode, kind, invert, start, scene_targets } => {
                 if let Some(end) = self.pointer {
-                    self.finish_deferred(mode, kind, invert, start, end);
+                    if mode == StrokeMode::Stamp {
+                        self.apply_stamp(kind, invert, start, end, true, scene_targets);
+                    } else {
+                        self.finish_line(kind, invert, start, end);
+                    }
                 }
             }
             Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points, None),
@@ -4818,7 +4830,15 @@ impl Editor {
     /// an undo step. The drag's length is the stamp's radius and its
     /// direction turns the alpha; a click (a drag under 4 px) stamps at
     /// the brush size.
-    fn apply_stamp(&mut self, kind: BrushKind, invert: bool, start: Vec2, end: Vec2, commit: bool) {
+    fn apply_stamp(
+        &mut self,
+        kind: BrushKind,
+        invert: bool,
+        start: Vec2,
+        end: Vec2,
+        commit: bool,
+        scene_targets: Option<Arc<[Mesh]>>,
+    ) {
         let doc = &mut self.documents[self.active_document];
         doc.history.revert_pending(&mut doc.scene);
         let click = end.distance(start) < 4.0 * self.pixels_per_point.max(0.1);
@@ -4835,7 +4855,8 @@ impl Editor {
         } else {
             ((drag.length() / self.pixels_per_point).max(4.0), -drag.y.atan2(drag.x))
         };
-        let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
+        let radius = self.world_radius(hit.point, radius_pt);
+        let mut stroke = self.new_stroke_seeded(kind, invert, radius, angle, None, scene_targets);
         let sample =
             StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
         let paints = kind == BrushKind::Paint || (kind.supports_also_paint() && self.brush_also_paints(kind));
@@ -4853,11 +4874,7 @@ impl Editor {
         }
     }
 
-    fn finish_deferred(&mut self, mode: StrokeMode, kind: BrushKind, invert: bool, start: Vec2, end: Vec2) {
-        if mode == StrokeMode::Stamp {
-            self.apply_stamp(kind, invert, start, end, true);
-            return;
-        }
+    fn finish_line(&mut self, kind: BrushKind, invert: bool, start: Vec2, end: Vec2) {
         let size = self.canvas_size();
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
         let ray = |p: Vec2| self.camera.ray(p - origin, size);
@@ -7182,7 +7199,7 @@ impl Editor {
             (c.piece, c.kind, c.invert, c.world_per_pt, c.paint_seed)
         };
         let radius = self.brush_radius_pt * c_world_per_pt;
-        let mut stroke = self.new_stroke_seeded(c_kind, c_invert, radius, 0.0, Some(paint_seed));
+        let mut stroke = self.new_stroke_seeded(c_kind, c_invert, radius, 0.0, Some(paint_seed), None);
         let settings = *stroke.settings();
         let paint = (c_kind == BrushKind::Paint).then(|| (self.paint_color, self.paint_jitter(c_kind)));
         let dragging = matches!(self.drag, Drag::CurveHandle { .. });
@@ -7379,7 +7396,7 @@ impl Editor {
         }
         let Some(c) = self.curve.take() else { return };
         let radius = self.brush_radius_pt * c.world_per_pt;
-        let mut stroke = self.new_stroke_seeded(c.kind, c.invert, radius, 0.0, Some(c.paint_seed));
+        let mut stroke = self.new_stroke_seeded(c.kind, c.invert, radius, 0.0, Some(c.paint_seed), None);
         if c.kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
@@ -14251,6 +14268,50 @@ mod tests {
             e.undo();
             assert_eq!(before, e.scene.active().mesh.positions);
         }
+    }
+
+    #[test]
+    fn scene_project_stamp_reuses_targets_through_preview_and_commit() {
+        let mut e = editor();
+        e.stroke_mode = StrokeMode::Stamp;
+        e.brush_kind = BrushKind::SceneProject;
+        e.symmetry = Symmetry::default();
+        let visible = Piece::new("Target", primitives::icosphere(3, 1.12));
+        let next = Piece::new("Hidden", primitives::icosphere(3, 1.35));
+        e.scene.pieces.push(visible);
+        e.scene.pieces.push(next);
+        e.scene.pieces[2].visible = false;
+        let before = e.scene.active().mesh.positions.clone();
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        let Drag::Deferred { scene_targets: Some(targets), .. } = &e.drag else {
+            panic!("scene project stamp should capture targets");
+        };
+        assert_eq!(targets.len(), 1);
+        let targets = Arc::clone(targets);
+        // With no current targets, a fresh scene scan would leave the stroke inert.
+        e.scene.pieces[1].visible = false;
+        for x in [430.0, 460.0] {
+            e.pointer_moved(Vec2::new(x, 300.0));
+            assert!(e.flush_drag());
+            let Drag::Deferred { scene_targets: Some(preview_targets), .. } = &e.drag else {
+                panic!("stamp preview should retain its targets");
+            };
+            assert!(Arc::ptr_eq(&targets, preview_targets));
+            assert_ne!(e.scene.active().mesh.positions, before);
+        }
+        let preview = e.scene.active().mesh.positions.clone();
+        e.pointer_up();
+        assert_eq!(e.scene.active().mesh.positions, preview);
+        assert_eq!(Arc::strong_count(&targets), 1, "release drops the gesture snapshot");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        let Drag::Deferred { scene_targets: Some(targets), .. } = &e.drag else {
+            panic!("a new gesture should capture current visibility");
+        };
+        assert!(targets.is_empty());
     }
 
     /// Draw a curve stroke from left to right across the sphere.
