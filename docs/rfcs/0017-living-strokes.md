@@ -122,9 +122,20 @@ Join, Symmetrize, retopology, and importing over the piece. These already go
 through `record_topology`; that call bakes the piece's strokes and the panel
 shows a one-line note ("Strokes baked by Voxel remesh").
 
-**Subdivision levels:** strokes are recorded on the level they were made
-on. Switching levels bakes the strokes of the level you leave, since detail
-moves between levels when you switch.
+**Subdivision levels** ([#599](https://github.com/crisprintsstuff/OxyBrush/issues/599)):
+position-only strokes keep their deltas in the order of the level where
+they were made. Switching or adding levels projects those deltas into
+the displayed mesh. A strength change also updates the finer details
+stored in the stack.
+
+Painted strokes still require an explicit bake. Their color deltas use
+the same linear interpolation as ordinary vertex colors. Inherited
+vertices keep their deltas, edge points average their endpoints, and
+Catmull–Clark face points average their corners. Moving down retains the
+inherited vertex prefix. Signed deltas can be negative and must survive
+interpolation without clamping. To make a painted layer editable while
+showing a coarser mesh, the editor must also retain its native deltas for
+fine-only vertices and update stored fine paint when the layer changes.
 
 Whole-piece edits (the Deform window, the transform gizmo, Fit to standard
 size) are recorded as strokes too, named after the tool, so they can be
