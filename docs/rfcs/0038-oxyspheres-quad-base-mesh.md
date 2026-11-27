@@ -1,6 +1,6 @@
 # RFC 0038 — OxySpheres quad base mesh
 
-**Status:** Accepted (Subdivision, Resolution ring density, and junction Blend shipped; higher-valence junctions still follow-up). Follow-up to [RFC 0034](0034-oxyspheres.md).
+**Status:** Accepted. Quad skin supports connected three-way junctions, Subdivision, Resolution, and Blend. Follow-up to [RFC 0034](0034-oxyspheres.md).
 
 ## Summary
 
@@ -67,8 +67,8 @@ the armature and mesh.
 This scales detail relative to the base cage, so a longer chain still has
 more total faces than a short one.
 
-**Resolution** (same slider as voxel skin) densifies rings along long links
-when above 160; at 160 and below the cage stays one ring per sphere.
+**Resolution** (same slider as voxel skin) adds rings along long links
+above 160, including between junction collars.
 **Blend** (0..=1) softens three-way junctions by moving collar rings out
 from the joint; `0.5` matches the previous fixed collar. Endpoints and
 limb radii stay put. Acute, wide and mirrored forks are validated across
@@ -101,6 +101,13 @@ subdivision checks. An asymmetric, nonplanar fork with a bent side branch
 also passes at two levels. Surface validation rejects intersections between
 triangles that do not share a vertex. Inspect the sample junction profiles
 before expanding the supported armature types.
+
+The connected-junction follow-up sweeps one quad strip between the facing
+collars, including through intermediate bends. Separate hull patches keep
+triangles local to each junction. An armature with two forks subdivides
+twice while staying closed. If the collars consume the shared link, the
+worker rejects the build and keeps the armature open for editing. For joints
+with four or more links, choose **Voxel skin**.
 
 ## Alternatives
 
