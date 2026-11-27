@@ -274,7 +274,7 @@ get("export").addEventListener("click", () => {
   const url = URL.createObjectURL(new Blob([toObj(composite().mix, faces)], { type: "text/plain" }));
   const link = document.createElement("a");
   link.href = url;
-  link.download = "sculpt-variants-mix.obj";
+  link.download = "oxymorph-mix.obj";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   setStatus("Exported the current mix.");

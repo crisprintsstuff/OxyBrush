@@ -837,6 +837,7 @@ impl App {
         // A curve stroke's preview is the whole piece with the stroke
         // applied: draw it in the piece's place, looking like the piece.
         let curve_piece = ed.preview_in_place();
+        let morph_pair = ed.oxymorph_preview_pair();
         // While another piece is edited, pieces with levels are drawn at
         // their lowest level (Lighter inactive pieces), from a copy kept on
         // the GPU under its own id next to the full mesh, so switching back
@@ -856,7 +857,7 @@ impl App {
             p.material.clone()
         };
         let mut wanted: Vec<String> = Vec::new();
-        for p in ed.scene.pieces.iter().filter(|p| p.visible || sources.contains(&p.id)) {
+        for p in ed.scene.pieces.iter().filter(|p| p.visible || Some(p.id) == curve_piece || sources.contains(&p.id)) {
             if let Some(k) = piece_key(p)
                 && ed.resolve_material(&k).is_some()
                 && !wanted.contains(&k)
@@ -910,7 +911,11 @@ impl App {
                 && (all_wires || Some(p.id) == poly_wire)
                 && p.mesh.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
-            if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
+            if p.visible
+                && Some(p.id) != curve_piece
+                && Some(p.id) != retopo_piece
+                && !morph_pair.is_some_and(|pair| pair.contains(&p.id))
+            {
                 let material = slot_of(p.id);
                 let shown = if proxied.contains(&p.id) { proxy_id(p.id) } else { p.id };
                 items.push(oxy_render::DrawItem {
@@ -933,6 +938,9 @@ impl App {
         let draws = ed.instance_draws();
         let scatter_pending = ed.instance_scatter_pending();
         for d in &draws {
+            if morph_pair.is_some_and(|pair| pair.contains(&d.host)) {
+                continue;
+            }
             if self.instance_uploaded.get(&d.key) != Some(&d.generation) {
                 g.viewport.set_instances(&g.device, &g.queue, d.key, &d.transforms);
                 self.instance_uploaded.insert(d.key, d.generation);

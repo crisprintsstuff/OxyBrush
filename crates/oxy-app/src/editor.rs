@@ -2895,6 +2895,11 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
+        if self.oxymorph_preview_pair().is_some() {
+            let action = self.keymap.nav_action(NavButton::Left, self.active_modifiers()).unwrap_or(NavAction::Orbit);
+            self.drag = self.drag_for_nav(Some(action), button);
+            return;
+        }
         // A curve selection being clicked out takes every click.
         if self.select_curve_click(p) {
             return;
@@ -5597,6 +5602,7 @@ impl Editor {
     pub(crate) fn replace_document(&mut self, scene: Scene, path: Option<PathBuf>) {
         self.pointer_up();
         self.job = None;
+        self.oxymorph = None;
         self.scene = scene;
         self.import_findings.clear();
         self.show_import_inspection = false;
@@ -5648,6 +5654,7 @@ impl Editor {
             && doc.deform_drag.is_none()
             && doc.color_filter_drag.is_none()
             && doc.surface_noise_session.is_none()
+            && doc.oxymorph.is_none()
             && doc.hold_offer.is_none()
     }
 
@@ -7906,6 +7913,9 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        if self.oxymorph_preview_pair().is_some() {
+            return self.oxymorph_preview_mesh_mut();
+        }
         if self.finishing_stamp_piece().is_some() {
             return self.finishing_stamp.as_mut().map(|p| &mut p.mesh);
         }
@@ -7963,6 +7973,9 @@ impl Editor {
 
     /// The piece replaced by a preview that keeps the piece's material.
     pub fn preview_in_place(&self) -> Option<u64> {
+        if let Some([source, _]) = self.oxymorph_preview_pair() {
+            return Some(source);
+        }
         if let Some(piece) = self.finishing_stamp_piece().or_else(|| self.scene_stamp_preview_piece()) {
             return Some(piece);
         }
@@ -11292,6 +11305,19 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn oxymorph_session_belongs_to_its_project() {
+        let mut e = editor();
+        e.oxymorph_open();
+        assert!(e.oxymorph.is_some());
+        let a = e.active_document;
+        let b = e.new_tab("sphere");
+        assert_ne!(a, b);
+        assert!(e.oxymorph.is_none());
+        e.switch_tab(a);
+        assert!(e.oxymorph.is_some());
     }
 
     /// An editor with the bundled in-app plugins loaded from a temporary

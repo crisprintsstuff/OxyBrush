@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **OxyMorph.** Fork an editable variant, preview the global blend of two matched shapes, and create an undoable result piece. [RFC 0056](docs/rfcs/0056-sculpt-variants.md)
+
 ### Fixed
 
 - **Plane Clip** follows the drawn Curve or closed shape, preserving depth as it moves vertices to the cutter boundary. [#638](https://github.com/crisprintsstuff/OxyBrush/issues/638)

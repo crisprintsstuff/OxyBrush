@@ -236,6 +236,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.surface_noise_open();
             },
         ),
+        cmd(ed, Cmd::OxyMorph, "oxymorph morph blend sculpt variants fork mix", Editor::oxymorph_open),
         cmd(
             ed,
             Cmd::ScaleCoverWindow,
