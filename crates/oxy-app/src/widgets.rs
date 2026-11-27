@@ -1465,6 +1465,17 @@ pub fn section<R>(
     default_open: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
+    section_with_id(ui, title, title, tip, default_open, add)
+}
+
+pub fn section_with_id<R>(
+    ui: &mut Ui,
+    id: &str,
+    title: &str,
+    tip: &str,
+    default_open: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     let header = if studio_style() {
         // A thin divider, then the title small and quiet, in the same case as the Graphite style.
         let r = ui.available_rect_before_wrap();
@@ -1475,7 +1486,7 @@ pub fn section<R>(
     } else {
         egui::RichText::new(title).strong().size(14.0)
     };
-    let opened = egui::CollapsingHeader::new(header).id_salt(title).default_open(default_open).show(ui, add);
+    let opened = egui::CollapsingHeader::new(header).id_salt(id).default_open(default_open).show(ui, add);
     crate::tips::hover(opened.header_response.clone(), tip);
     ui.add_space(2.0);
     opened.body_returned
@@ -1493,6 +1504,17 @@ mod tests {
         match &list.all_entries().nth(i).unwrap().shape {
             Shape::Rect(r) => r.clone(),
             s => panic!("not a rect: {s:?}"),
+        }
+    }
+
+    #[test]
+    fn section_stays_open_when_its_title_changes() {
+        let ctx = egui::Context::default();
+        for (title, default_open) in [("Alpha", true), ("Alpha: Scales", false)] {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                assert!(section_with_id(ui, "Alpha", title, "", default_open, |_| ()).is_some());
+            });
+            output.textures_delta.clear();
         }
     }
 
