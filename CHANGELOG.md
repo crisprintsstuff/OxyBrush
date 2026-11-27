@@ -7,6 +7,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 
 - **OxySpheres quad hands and feet.** An incoming limb and up to five fingers or toes can attach directly to one joint. Quad base mesh fits a separate loop around each link when the branches have room.
+- **Import inspection.** Imported mesh pieces are checked for open or non-manifold edges, inconsistent winding, and duplicate or degenerate faces. Use **Inspect import** in the status bar to see findings by piece. **Repair faces** corrects common face defects. **Close holes** fills suitable boundaries as a separate undoable action.
 
 ## [4.1.3] - 2026-11-27
 

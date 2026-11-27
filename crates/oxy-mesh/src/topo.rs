@@ -4,6 +4,9 @@ use crate::Mesh;
 use glam::Vec3;
 use std::collections::HashMap;
 
+mod import_repair;
+pub use import_repair::{ImportRepair, ImportRepairAction, repair_import};
+
 /// Split every triangle into four at edge midpoints. Shared edges share midpoints.
 pub fn midpoint_subdivide(positions: &[Vec3], tris: &[[u32; 3]]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let mut pos = positions.to_vec();
@@ -628,9 +631,9 @@ pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
 }
 
 /// Diagnostics report on mesh manifoldness and edge topology.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ManifoldReport {
-    /// True if the mesh is a closed watertight 2-manifold without boundary or non-manifold edges.
+    /// True if there are no open or non-manifold edges or repeated-index faces.
     pub is_manifold: bool,
     /// Number of open boundary edges (edges shared by only 1 face).
     pub boundary_edge_count: usize,
@@ -640,41 +643,90 @@ pub struct ManifoldReport {
     pub degenerate_triangle_count: usize,
 }
 
-/// Checks the 2-manifold topology of `mesh`, counting boundary edges, non-manifold edges, and degenerate faces.
+/// Counts for the decoded mesh at the time of import.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportTopologyReport {
+    pub topology: ManifoldReport,
+    pub inconsistent_winding_edges: usize,
+    /// Extra copies of triangles that reference the same three vertices.
+    pub duplicate_triangles: usize,
+    /// Triangles with distinct indices but zero geometric area.
+    pub zero_area_triangles: usize,
+}
+
+impl ImportTopologyReport {
+    pub fn has_findings(&self) -> bool {
+        !self.topology.is_manifold
+            || self.inconsistent_winding_edges > 0
+            || self.duplicate_triangles > 0
+            || self.zero_area_triangles > 0
+    }
+}
+
+/// Checks for open edges, non-manifold edges, and repeated-index triangles.
 pub fn check_manifold(mesh: &Mesh) -> ManifoldReport {
-    let mut boundary_edges = 0usize;
-    let mut non_manifold_edges = 0usize;
-    let mut degenerate_triangles = 0usize;
+    inspect_surface(mesh, false).topology
+}
 
-    let mut edge_counts: HashMap<(u32, u32), usize> = HashMap::with_capacity(mesh.triangle_count() * 3);
+/// Check edge topology and indexed faces, without modifying the mesh.
+pub fn inspect_import(mesh: &Mesh) -> ImportTopologyReport {
+    inspect_surface(mesh, true)
+}
 
-    for &[a, b, c] in &mesh.triangles {
-        if a == b || b == c || c == a {
-            degenerate_triangles += 1;
-            continue;
+fn inspect_surface(mesh: &Mesh, inspect_faces: bool) -> ImportTopologyReport {
+    let mut report = ImportTopologyReport::default();
+    let mut edges = Vec::new();
+    let mut faces = Vec::new();
+    // Use the mesh's existing incidence lists so scratch space depends only
+    // on the largest vertex fan. Count each edge at its lower vertex index.
+    for vertex in 0..mesh.positions.len() as u32 {
+        edges.clear();
+        faces.clear();
+        for &index in mesh.vertex_triangles(vertex) {
+            let triangle = mesh.triangles[index as usize];
+            let corner = triangle.iter().position(|&v| v == vertex).expect("incident triangle");
+            let next = triangle[(corner + 1) % 3];
+            let prev = triangle[(corner + 2) % 3];
+            if next == vertex || prev == vertex || next == prev {
+                if vertex <= next.min(prev) {
+                    report.topology.degenerate_triangle_count += 1;
+                }
+                continue;
+            }
+            if next > vertex {
+                edges.push((next, true));
+            }
+            if prev > vertex {
+                edges.push((prev, false));
+            }
+            if inspect_faces && vertex < next.min(prev) {
+                faces.push([next.min(prev), next.max(prev)]);
+                if zero_area(&mesh.positions, triangle) {
+                    report.zero_area_triangles += 1;
+                }
+            }
         }
-        for (u, v) in [(a, b), (b, c), (c, a)] {
-            let key = (u.min(v), u.max(v));
-            *edge_counts.entry(key).or_insert(0) += 1;
+        edges.sort_unstable();
+        for incident in edges.chunk_by(|a, b| a.0 == b.0) {
+            match incident {
+                [_] => report.topology.boundary_edge_count += 1,
+                [(_, a), (_, b)] => report.inconsistent_winding_edges += usize::from(a == b),
+                _ => report.topology.non_manifold_edge_count += 1,
+            }
         }
+        faces.sort_unstable();
+        report.duplicate_triangles += faces.windows(2).filter(|pair| pair[0] == pair[1]).count();
     }
+    let topology = &mut report.topology;
+    topology.is_manifold = topology.boundary_edge_count == 0
+        && topology.non_manifold_edge_count == 0
+        && topology.degenerate_triangle_count == 0;
+    report
+}
 
-    for &count in edge_counts.values() {
-        if count == 1 {
-            boundary_edges += 1;
-        } else if count > 2 {
-            non_manifold_edges += 1;
-        }
-    }
-
-    let is_manifold = boundary_edges == 0 && non_manifold_edges == 0 && degenerate_triangles == 0;
-
-    ManifoldReport {
-        is_manifold,
-        boundary_edge_count: boundary_edges,
-        non_manifold_edge_count: non_manifold_edges,
-        degenerate_triangle_count: degenerate_triangles,
-    }
+fn zero_area(positions: &[Vec3], triangle: [u32; 3]) -> bool {
+    let [a, b, c] = triangle.map(|v| positions[v as usize].as_dvec3());
+    (b - a).cross(c - a) == glam::DVec3::ZERO
 }
 
 /// Helper to verify if two triangles sharing edge `(u, v)` form a valid convex quad.
@@ -861,6 +913,37 @@ mod tests {
     }
 
     #[test]
+    fn import_inspection_finds_winding_duplicates_and_zero_area() {
+        let good = crate::primitives::cube(2, 1.0);
+        assert!(!inspect_import(&good).has_findings());
+        let mut faces = good.triangles.clone();
+        faces[0].swap(0, 1);
+        let reversed = Mesh::new(good.positions.clone(), faces);
+        let report = inspect_import(&reversed);
+        assert_eq!(report.inconsistent_winding_edges, 3);
+        assert!(report.topology.is_manifold, "the reversed face has no open edges");
+        assert!(report.has_findings());
+
+        // Oppositely wound copies can look closed by edge count alone.
+        let duplicate = Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2], [2, 1, 0]]);
+        let report = inspect_import(&duplicate);
+        assert_eq!(report.duplicate_triangles, 1);
+        assert!(report.topology.is_manifold);
+        assert!(report.has_findings());
+
+        let collinear = Mesh::new(vec![Vec3::ZERO, Vec3::X, 2.0 * Vec3::X], vec![[0, 1, 2]]);
+        let report = inspect_import(&collinear);
+        assert_eq!(report.zero_area_triangles, 1);
+        assert_eq!(report.topology.boundary_edge_count, 3);
+
+        let crowded =
+            Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::NEG_Y, Vec3::Z], vec![[0, 1, 2], [1, 0, 3], [0, 1, 4]]);
+        let report = inspect_import(&crowded);
+        assert_eq!(report.topology.non_manifold_edge_count, 1);
+        assert_eq!(report.inconsistent_winding_edges, 0);
+    }
+
+    #[test]
     fn quad_detection_on_cube_grid() {
         let cube = crate::primitives::cube(2, 1.0);
         let (quads, tris) = quad_and_triangle_counts(&cube.positions, &cube.triangles);
@@ -938,15 +1021,18 @@ pub fn boundary_loops(triangles: &[[u32; 3]]) -> Vec<Vec<u32>> {
 /// and triangles are appended.
 pub fn close_holes(data: &mut crate::MeshData) -> usize {
     let loops = boundary_loops(&data.triangles);
+    fill_boundary_loops(data, &loops);
+    loops.len()
+}
+
+fn fill_boundary_loops(data: &mut crate::MeshData, loops: &[Vec<u32>]) {
     let first_group = data.groups.iter().copied().max().map_or(1, |g| g + 1);
     let has_color = !data.color.is_empty();
-    for (group, lp) in (first_group..).zip(&loops) {
+    for (group, lp) in (first_group..).zip(loops) {
         let n = lp.len();
         let pts: Vec<Vec3> = lp.iter().map(|&v| data.positions[v as usize]).collect();
         let center = pts.iter().copied().sum::<Vec3>() / n as f32;
-        let edge = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.distance(*b)).sum::<f32>() / n as f32;
-        let radius = pts.iter().map(|p| p.distance(center)).sum::<f32>() / n as f32;
-        let rings = ((radius / edge.max(1e-9)).round() as usize).clamp(1, 64);
+        let rings = hole_patch_rings(&pts, center);
         let color =
             if has_color { lp.iter().map(|&v| data.color[v as usize]).sum::<Vec3>() / n as f32 } else { Vec3::ONE };
         let first_new = data.positions.len() as u32;
@@ -1007,7 +1093,13 @@ pub fn close_holes(data: &mut crate::MeshData) -> usize {
         }
         data.triangles.extend(new_tris);
     }
-    loops.len()
+}
+
+fn hole_patch_rings(points: &[Vec3], center: Vec3) -> usize {
+    let n = points.len() as f32;
+    let edge = points.iter().zip(points.iter().cycle().skip(1)).map(|(a, b)| a.distance(*b)).sum::<f32>() / n;
+    let radius = points.iter().map(|p| p.distance(center)).sum::<f32>() / n;
+    ((radius / edge.max(1e-9)).round() as usize).clamp(1, 64)
 }
 
 /// Make a mesh symmetric across the plane `position[axis] == center`:

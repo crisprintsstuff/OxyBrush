@@ -1,0 +1,56 @@
+# RFC 0057 — Inspect imported meshes
+
+- **Status:** Proposed with an implementation for review.
+- **Scope:** Surface topology of mesh pieces as they enter the editor.
+
+## Concept
+
+A sculpt may open successfully and still fail a remesher or slicer. Give the
+artist an inspection report at import, while the piece names still identify
+where to look. Show findings for each affected piece in a batch. Keep
+imports editable and undoable, including intentionally open surfaces.
+
+## Checks and presentation
+
+Count boundary edges, edges shared by more than two faces, shared edges with
+inconsistent winding, duplicate indexed triangles, and zero-area triangles
+in the mesh that OxyBrush decoded. Display an **Inspect import** button for
+findings from the latest successful import. The report names each affected
+piece and can select it for closer inspection and manual repair. A boundary
+can be intentional on a sheet.
+
+Use the mesh's vertex-to-triangle adjacency to inspect one vertex's incident
+edges at a time. Large files share the existing background import worker.
+Report data is per tab and describes the imported shape. A mesh can change
+afterward, which is why the report identifies it as an import snapshot.
+Structural file errors still use the import errors from the format reader.
+
+Self-intersections, disconnected vertex fans, and solid printability require
+additional checks. This first pass diagnoses indexed edges and triangles.
+
+## Repair
+
+**Repair faces** removes duplicate indexed faces and exact zero-area triangles,
+then makes winding consistent where the surface permits it. Preserve the
+majority orientation of each connected region and leave contradictory
+regions and ambiguous non-manifold joins for manual work. Preserve surviving
+vertex and face attributes, including UV corner order on reversed faces.
+
+**Close holes** is a separate action because open boundaries can be intentional.
+It fills simple boundary loops on a surface with consistent winding and no
+other reported face or edge defects. Flat sheets are left open because a cap
+would overlap the sheet. Both actions run on the worker, validate
+the result, keep one Undo step, and update the report. If a piece changes while
+the worker runs, discard the result. Preserve the report when Undo swaps the
+old mesh back.
+
+## Acceptance criteria
+
+- A closed box imports quietly. A sheet, non-manifold edge, reversed face,
+  duplicate face, or collinear triangle produces the corresponding finding.
+- Report every affected piece with its current scene name. Keep geometry and
+  the active piece intact while checking, and take the artist to the selected
+  row's piece on request.
+- A large batch still uses the import worker. The report follows its tab,
+  and Undo can remove the imported pieces. Fitting a mesh to the scene
+  preserves the reported piece across the two import undo steps.
