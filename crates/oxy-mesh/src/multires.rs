@@ -698,6 +698,64 @@ impl Multires {
         )
     }
 
+    /// Apply a change in layer strength to the entire subdivision stack.
+    /// Use a record captured from this hierarchy before any levels were
+    /// removed. Keep the active mesh and the stored fine details in sync
+    /// even when some edited vertices exist only at a higher level.
+    pub fn apply_level_displacements(
+        &mut self,
+        mesh: &mut Mesh,
+        record: &LevelDisplacements,
+        strength_delta: f32,
+    ) -> Option<()> {
+        if !self.is_bound_to(mesh)
+            || self.levels.get(record.level)?.positions.len() != record.points
+            || !strength_delta.is_finite()
+        {
+            return None;
+        }
+        if strength_delta == 0.0 || record.deltas.is_empty() {
+            return Some(());
+        }
+
+        let order = self.level_indices(mesh);
+        let mut deltas = vec![Vec3::ZERO; record.points];
+        for &(vertex, delta) in &record.deltas {
+            deltas[vertex as usize] = delta * strength_delta;
+        }
+        self.sync_from(mesh);
+        for level in 0..self.levels.len() {
+            if level > record.level {
+                deltas = self.refine_positions(level, &deltas);
+            }
+            for (position, delta) in self.levels[level].positions.iter_mut().zip(&deltas) {
+                *position += *delta;
+            }
+            if level > 0 {
+                let smooth = self.smooth_from(level);
+                let current = &mut self.levels[level];
+                current.details = current.positions.iter().zip(smooth).map(|(&p, s)| p - s).collect();
+                if current.details.iter().all(|&delta| delta == Vec3::ZERO) {
+                    current.details.clear();
+                }
+            }
+        }
+
+        let positions = &self.levels[self.active].positions;
+        let mut moved = Vec::new();
+        for (vertex, i) in order.into_iter().enumerate() {
+            let position = positions[i as usize];
+            if mesh.positions[vertex] != position {
+                mesh.positions[vertex] = position;
+                moved.push(vertex as u32);
+            }
+        }
+        if !moved.is_empty() {
+            mesh.update_after_move(&moved);
+        }
+        Some(())
+    }
+
     /// Whether each level was made with smoothing (level 0: true).
     pub fn level_smooth(&self) -> Vec<bool> {
         self.levels.iter().map(|l| l.smooth).collect()
@@ -1975,6 +2033,35 @@ mod tests {
             out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
         }
         (out, edges)
+    }
+
+    #[test]
+    fn changing_a_fine_layer_from_the_base_updates_hidden_detail() {
+        let base = primitives::cube(1, 2.0);
+        let mut stack = Multires::new_catmull_clark(&base, None);
+        let data = stack.add_level(&base);
+        let mut fine = rebuild(&mut stack, data);
+        let order = stack.level_indices(&fine);
+        let vertex = order.iter().position(|&i| i as usize >= base.vertex_count()).unwrap();
+        let before = stack.levels[1].positions.clone();
+        let delta = Vec3::new(0.125, -0.25, 0.0);
+        let layer = stack.capture_displacements(&fine, &[(vertex as u32, delta)]).unwrap();
+        stack.apply_level_displacements(&mut fine, &layer, 1.0).unwrap();
+        assert_eq!(fine.positions[vertex], before[order[vertex] as usize] + delta);
+
+        let data = stack.set_level(&fine, 0);
+        let mut coarse = rebuild(&mut stack, data);
+        let coarse_before = coarse.positions.clone();
+        stack.apply_level_displacements(&mut coarse, &layer, -1.0).unwrap();
+        assert_eq!(coarse.positions, coarse_before);
+        let data = stack.set_level(&coarse, 1);
+        assert_eq!(data.positions, before);
+        let fine = rebuild(&mut stack, data);
+        let data = stack.set_level(&fine, 0);
+        let mut coarse = rebuild(&mut stack, data);
+        stack.apply_level_displacements(&mut coarse, &layer, 0.5).unwrap();
+        let data = stack.set_level(&coarse, 1);
+        assert_eq!(data.positions[order[vertex] as usize], before[order[vertex] as usize] + delta * 0.5);
     }
 
     #[test]
