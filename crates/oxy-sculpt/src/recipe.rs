@@ -45,6 +45,8 @@ pub struct StrokeRecipe {
     pub paint_seed: u64,
     /// Seed for alpha rotate jitter (version 8+).
     pub rotate_jitter_seed: u64,
+    /// Retain the old initial dab and edge filtering when replaying saved strokes.
+    pub legacy_alpha: bool,
     pub alpha: Option<AlphaStamp>,
     pub events: Vec<RecipeEvent>,
 }
@@ -83,7 +85,8 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
 /// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
 /// 7 smooth paint. 8 alpha tile / roll / rotate jitter (+ seed).
-const VERSION: u8 = 10;
+/// 11 delays the initial directional dab and uses continuous alpha repeats.
+const VERSION: u8 = 11;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -97,6 +100,7 @@ impl StrokeRecipe {
             .with_paint_jitter(self.paint_jitter, self.paint_seed)
             .with_rotate_jitter_seed(self.rotate_jitter_seed)
             .with_alpha(self.alpha.clone())
+            .with_legacy_alpha(self.legacy_alpha)
             .with_symmetry_center(self.center)
     }
 
@@ -122,6 +126,7 @@ impl StrokeRecipe {
                 RecipeEvent::Modulation { size, strength } => stroke.set_modulation(size, strength),
             }
         }
+        stroke.finish(mesh, touch);
     }
 
     /// Memory the recipe takes, for the living strokes budget (the alpha
@@ -133,14 +138,14 @@ impl StrokeRecipe {
     /// The recipe as bytes, for saving.
     ///
     /// ```text
-    /// "OXSR"  version:u8 (1 through 10)
+    /// "OXSR"  version:u8 (1 through 11)
     /// brush:text  falloff:text  shape:text          keys as in brush presets
     /// radius strength focal_shift spacing auto_smooth gravity spray
     ///   noise_scale crease_pinch : f32 each
     /// flags:u8      1 pressure_strength, 2 pressure_radius, 4 front_faces_only,
     ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5), 128 smooth paint (version 7)
     /// [version 9+: also_paint:u8]
-    /// [version 10+: rgb_strength:f32]
+    /// [version 10: rgb_strength:f32; version 11+: has_rgb_strength:u8, optional rgb_strength:f32]
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
@@ -157,8 +162,11 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let version = if self.settings.also_paint && self.settings.rgb_strength.is_some() {
+        let version = if !self.legacy_alpha && self.alpha.as_ref().is_some_and(|a| a.follow_stroke || a.roll || a.tile)
+        {
             VERSION
+        } else if self.settings.also_paint && self.settings.rgb_strength.is_some() {
+            10
         } else if self.settings.also_paint {
             9
         } else if self.rotate_jitter_seed != 0 || self.alpha.as_ref().is_some_and(Self::alpha_needs_v8) {
@@ -210,7 +218,12 @@ impl StrokeRecipe {
         if version >= 9 {
             b.push(u8::from(s.also_paint));
         }
-        if version >= 10 {
+        if version >= 11 {
+            b.push(u8::from(s.rgb_strength.is_some()));
+            if let Some(strength) = s.rgb_strength {
+                put_f32(&mut b, strength);
+            }
+        } else if version == 10 {
             put_f32(&mut b, s.rgb_strength.unwrap_or(s.strength));
         }
         let y = &self.symmetry;
@@ -317,7 +330,8 @@ impl StrokeRecipe {
         }
         let flags = r.u8()?;
         let also_paint = version >= 9 && r.u8()? != 0;
-        let rgb_strength = if version >= 10 { Some(r.f32()?.clamp(0.0, 1.0)) } else { None };
+        let has_rgb_strength = version == 10 || (version >= 11 && r.u8()? != 0);
+        let rgb_strength = if has_rgb_strength { Some(r.f32()?.clamp(0.0, 1.0)) } else { None };
         let settings = BrushSettings {
             kind,
             radius,
@@ -449,6 +463,7 @@ impl StrokeRecipe {
             paint_jitter,
             paint_seed,
             rotate_jitter_seed,
+            legacy_alpha: version < 11 && alpha.as_ref().is_some_and(|a| a.follow_stroke || a.roll || a.tile),
             alpha,
             events,
         })
@@ -765,6 +780,33 @@ mod tests {
     }
 
     #[test]
+    fn version_eleven_keeps_directional_clicks_and_legacy_replay_distinct() {
+        let alpha = Arc::new(BuiltinAlpha::Stripes.generate(32));
+        let stamp = AlphaStamp { follow_stroke: true, rotation: 0.2, ..AlphaStamp::new(alpha.clone()) };
+        let settings = BrushSettings { also_paint: true, rgb_strength: None, ..Default::default() };
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp)).with_recording();
+        let mut mesh = primitives::icosphere(3, 1.0);
+        let original = mesh.clone();
+        stroke.add_sample(&mut mesh, path(2)[0], &mut |_, _| {});
+        assert_eq!(stroke.dab_count(), 0);
+        stroke.finish(&mut mesh, &mut |_, _| {});
+        assert_eq!(stroke.dab_count(), 1);
+        let recipe = stroke.take_recipe().unwrap();
+        let find = |look: AlphaLookup<'_>| look.matches(&alpha).then(|| alpha.clone());
+        let after = StrokeRecipe::from_bytes(&recipe.to_bytes(), &find).unwrap();
+        assert!(!after.legacy_alpha);
+        assert_eq!(after.settings.rgb_strength, None);
+        let older = StrokeRecipe::from_bytes(&recipe.encode(9), &find).unwrap();
+        assert!(older.legacy_alpha);
+        let mut current = original.clone();
+        let mut legacy = original;
+        after.replay(&mut current, &mut |_, _| {});
+        older.replay(&mut legacy, &mut |_, _| {});
+        assert_eq!(current.positions, mesh.positions);
+        assert_eq!(current.positions, legacy.positions, "a stationary click keeps its former orientation");
+    }
+
+    #[test]
     fn replaying_a_recipe_makes_the_same_stroke() {
         let base = primitives::icosphere(5, 1.0);
         let samples = path(40);
@@ -871,6 +913,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: None,
             events: vec![RecipeEvent::Modulation { size: 1.0, strength: 1.0 }],
         };
@@ -1163,6 +1206,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: Some(AlphaStamp {
                 rotation: 0.2,
                 follow_stroke: true,

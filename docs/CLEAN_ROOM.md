@@ -73,6 +73,7 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-26 | [libigl public tutorial on seamless integer-grid parameterization](https://libigl.github.io/tutorial/#poisson-parametrization), citing Bommes et al. | Seam constraints align grid coordinates under integer transforms | OxyRemesh projects cut vertices onto supplied affine constraints, using exact quarter turns and closing cycles before extraction |
 | 2026-11-26 | [libigl public tutorial on seamless integer-grid parameterization](https://libigl.github.io/tutorial/#poisson-parametrization) and its citation to Bommes et al. | Integer constraints align the isolines across a cut | RFC 0044: independent endpoint least-squares choice, then verify all seam transitions jointly |
 | 2026-11-27 | [RetopoFlow 4 public Contours user manual](https://docs.retopoflow.com/v4/contours.html) | Draw a stroke across a cylindrical surface and use the middle hit to locate its cross section | Retopology Contour ([RFC 0055](rfcs/0055-retopology-contours.md)), using OxyBrush mesh-plane intersections and ring alignment |
+| 2026-11-27 | [Adobe Photoshop File Formats Specification](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/), File Header and Image Data Section | PSD version 1 composite layout, channel planes and PackBits row lengths | Composite alpha input for [#601](https://github.com/crisprintsstuff/OxyBrush/issues/601) |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can

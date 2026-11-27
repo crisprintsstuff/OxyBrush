@@ -3662,11 +3662,13 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         });
 
         let alpha = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned();
-        let alpha_tex = alpha.as_ref().map(|a| alpha_texture(&ctx, a));
+        let alpha_tex = alpha.as_ref().map(|a| alpha_preview_texture(&ctx, a, ed.alpha_invert));
         let caption = alpha.as_ref().map_or("No alpha".to_string(), |a| a.name.clone());
         let r = widgets::tile(
             ui,
-            alpha_tex.as_ref().map_or(widgets::TilePreview::Empty, widgets::TilePreview::Texture),
+            alpha_tex.as_ref().map_or(widgets::TilePreview::Empty, |t| {
+                widgets::TilePreview::RotatedTexture(t, ed.alpha_rotation_deg)
+            }),
             &caption,
             plain::ALPHA_TILE,
             size,
@@ -3890,9 +3892,16 @@ fn custom_matcap_texture(ctx: &egui::Context, m: &crate::matcaps::CustomMatcap) 
 /// Cache the preview for this alpha. A project and the library can have
 /// different images with the same name and size.
 fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHandle {
-    widgets::cached_texture(ctx, ("alpha", a as *const oxy_sculpt::Alpha, a.name.as_str(), a.size), || {
-        let (n, px) = a.to_preview_luma8(128);
-        egui::ColorImage::from_gray([n as usize, n as usize], &px)
+    alpha_preview_texture(ctx, a, false)
+}
+
+fn alpha_preview_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha, invert: bool) -> egui::TextureHandle {
+    widgets::cached_texture(ctx, ("alpha", a as *const oxy_sculpt::Alpha, a.name.as_str(), a.size, invert), || {
+        let (n, mut pixels) = a.to_preview_luma8(128);
+        if invert {
+            pixels.iter_mut().for_each(|p| *p = 255 - *p);
+        }
+        egui::ColorImage::from_gray([n as usize, n as usize], &pixels)
     })
 }
 
@@ -5440,26 +5449,12 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
-/// Preview of an alpha (texture cached per alpha name and invert state).
-fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha, invert: bool) {
-    let id = egui::Id::unique(("alpha_tex", alpha.name.as_str(), alpha.size, invert));
-    let tex = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
-        let (n, mut pixels) = alpha.to_preview_luma8(128);
-        if invert {
-            for p in &mut pixels {
-                *p = 255 - *p;
-            }
-        }
-        let img = egui::ColorImage::from_gray([n as usize, n as usize], &pixels);
-        let t = ui.ctx().load_texture(
-            format!("alpha {} (invert: {invert})", alpha.name),
-            img,
-            egui::TextureOptions::LINEAR,
-        );
-        ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
-        t
-    });
-    tips::hover(ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0)))), tips::alpha_tip(&alpha.name));
+/// Selected alpha preview. Reuse the image as rotation changes.
+fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha, invert: bool, rotation_deg: f32) {
+    let tex = alpha_preview_texture(ui.ctx(), alpha, invert);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(64.0, 64.0), egui::Sense::hover());
+    widgets::paint_rotated_texture(ui, &tex, rect, rotation_deg);
+    tips::hover(response, tips::alpha_tip(&alpha.name));
 }
 
 /// A short message over the bottom of the viewport that fades out.
@@ -7299,7 +7294,7 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
     match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
         Some(a) => {
             ui.horizontal(|ui| {
-                alpha_thumbnail(ui, &a, ed.alpha_invert);
+                alpha_thumbnail(ui, &a, ed.alpha_invert, ed.alpha_rotation_deg);
                 ui.vertical(|ui| {
                     tips::hover(
                         ui.add(crate::widgets::Bar(

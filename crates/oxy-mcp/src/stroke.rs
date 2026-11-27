@@ -168,6 +168,7 @@ pub fn apply_samples(mesh: &mut Mesh, params: &StrokeParams, touch: &mut dyn FnM
     for sample in &params.samples {
         stroke.add_sample(mesh, *sample, touch);
     }
+    stroke.finish(mesh, touch);
     stroke.dab_count()
 }
 

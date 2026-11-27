@@ -1,6 +1,6 @@
 # RFC 0053 — MCP geometry write (colors + displacement)
 
-**Status:** Dense and sparse writes and desktop viewport images implemented
+**Status:** Dense and sparse writes, grouped undo, geometry event origins, viewport images and light data implemented
 **Issue:** [#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)
 
 ## Summary
@@ -60,12 +60,35 @@ viewport dimensions, visible mesh state, or project changes.
 `clear_viewport_image` also removes it. These methods are exposed
 through the Python SDK and local MCP in single-viewport mode.
 
+## Grouped Undo and change origin
+
+Pass the same optional `undo_group` to consecutive `patch_geometry`
+and `set_geometry` calls from one listener, targeting one piece with
+the same topology. The group keeps the earliest snapshot of each
+changed chunk, including its colors, and Redo restores the final
+state. An unrelated history edit, Undo, Redo, or a write to another
+piece starts a new group. Omitting the field makes a separate undo
+step. Reuse the group name only within a sequence you want to undo
+together.
+
+A `changes` reply includes the listener's opaque `session_origin`.
+Geometry events from those tools include `origin`. Compare the two
+to filter out your own writes. Artist edits and events without a
+known origin omit `origin`. The desktop app gives each Python run
+its own listener and ID. External clients sharing one listener also
+share its ID. Headless sessions provide their own ID.
+
+## Viewport lights
+
+Desktop `scene_state` includes `lighting` with the enabled lights,
+linear color and intensity, ambient rig, exposure, surface settings,
+and shadow settings. Positions, aim points, sun directions, and area
+diameters are resolved in world space. Distance falloff uses the
+reported `scene_size`. Headless sessions have no viewport rig.
+
 ## Follow-up
 
-- Group several live writes in one undo operation and report their origin
-  in change events.
-- Expose viewport image writes to in-app WASM and add structured light
-  data for external renderers.
+- Expose viewport image writes to in-app WASM.
 - Topology replacement over MCP.
 
 ## Acceptance

@@ -268,13 +268,48 @@ impl Alpha {
         self.sample_inside(Vec2::new(wrap_pm1(uv.x), wrap_pm1(uv.y)))
     }
 
+    /// Filter across pixel centers on both sides of a tiled seam. Roll
+    /// repeats along the stroke and keeps the unclamped width of the image.
+    pub(crate) fn sample_periodic(&self, uv: Vec2, wrap_v: bool) -> f32 {
+        if !wrap_v && uv.y.abs() > 1.0 {
+            return 0.0;
+        }
+        let n = self.size as f32;
+        let u = (wrap_pm1(uv.x) + 1.0) * 0.5 * n - 0.5;
+        let (x0, x1, tx) = Self::repeat_axis(u, self.size);
+        let (y0, y1, ty) = if wrap_v {
+            Self::repeat_axis((1.0 - wrap_pm1(uv.y)) * 0.5 * n - 0.5, self.size)
+        } else {
+            Self::clamp_axis((1.0 - uv.y) * 0.5 * n - 0.5, self.size)
+        };
+        self.interpolate((x0, x1, tx), (y0, y1, ty))
+    }
+
     fn sample_inside(&self, uv: Vec2) -> f32 {
         let n = self.size as f32;
-        let fx = ((uv.x + 1.0) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
-        let fy = ((1.0 - uv.y) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
-        let (x0, y0) = (fx.floor() as u32, fy.floor() as u32);
-        let (x1, y1) = ((x0 + 1).min(self.size - 1), (y0 + 1).min(self.size - 1));
-        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let x = Self::clamp_axis((uv.x + 1.0) * 0.5 * n - 0.5, self.size);
+        let y = Self::clamp_axis((1.0 - uv.y) * 0.5 * n - 0.5, self.size);
+        self.interpolate(x, y)
+    }
+
+    fn clamp_axis(x: f32, size: u32) -> (u32, u32, f32) {
+        let x = x.clamp(0.0, size as f32 - 1.0);
+        let a = x.floor() as u32;
+        (a, (a + 1).min(size - 1), x - a as f32)
+    }
+
+    fn repeat_axis(x: f32, size: u32) -> (u32, u32, f32) {
+        let a = x.floor();
+        if a < 0.0 {
+            (size - 1, 0, x - a)
+        } else {
+            let i = a as u32;
+            let next = if i + 1 == size { 0 } else { i + 1 };
+            (i, next, x - a)
+        }
+    }
+
+    fn interpolate(&self, (x0, x1, tx): (u32, u32, f32), (y0, y1, ty): (u32, u32, f32)) -> f32 {
         let at = |x: u32, y: u32| self.data[(y * self.size + x) as usize];
         let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;

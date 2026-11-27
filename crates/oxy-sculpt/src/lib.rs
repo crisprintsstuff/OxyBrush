@@ -519,27 +519,43 @@ impl AlphaStamp {
     ///
     /// `path_dist` is arc length along the stroke to the dab (Roll).
     pub fn weight_at(&self, offset: Vec3, tangent: Vec3, bitangent: Vec3, radius: f32, path_dist: f32) -> f32 {
+        self.weight_at_axes(offset.dot(tangent), offset.dot(bitangent), radius, path_dist, radius, false)
+    }
+
+    fn weight_at_axes(
+        &self,
+        along: f32,
+        across: f32,
+        radius: f32,
+        path_dist: f32,
+        roll_radius: f32,
+        legacy: bool,
+    ) -> f32 {
         let r = radius.max(1e-6);
-        let along = offset.dot(tangent);
-        let across = offset.dot(bitangent);
-        let (u, v) = if self.roll {
-            let dist = (self.roll_distance.max(0.05)) * r;
-            // One alpha period (−1..1) per `2 * radius * roll_distance` of path.
-            let u = wrap_pm1((path_dist + along) / dist);
-            let v = if self.tile { wrap_pm1(across / r * self.tile_repeats.max(0.05)) } else { across / r };
-            (u, v)
-        } else if self.tile {
-            let n = self.tile_repeats.max(0.05);
-            (wrap_pm1(along / r * n), wrap_pm1(across / r * n))
-        } else {
-            (along / r, across / r)
-        };
-        if self.roll || self.tile {
-            let sample = self.alpha.sample_wrapped(Vec2::new(u, v));
-            if self.invert { (1.0 - sample).clamp(0.0, 1.0) } else { sample }
-        } else {
-            self.sample(Vec2::new(u, v))
+        if !self.roll && !self.tile {
+            return self.sample(Vec2::new(along / r, across / r));
         }
+        let repeats = self.tile_repeats.max(0.05);
+        let (u, v) = if self.roll {
+            // The pitch follows the starting radius. The current dab
+            // width can still follow pressure without moving the pattern.
+            let dist = self.roll_distance.max(0.05) * roll_radius.max(1e-6);
+            let u = (path_dist + along) / dist;
+            let v = across / r * if self.tile { repeats } else { 1.0 };
+            (u, v)
+        } else {
+            (along / r * repeats, across / r * repeats)
+        };
+        if !legacy && !self.tile && v.abs() > 1.0 {
+            return 0.0;
+        }
+        let value = if legacy {
+            // Earlier recipes wrapped UV before using the edge texel.
+            self.alpha.sample_wrapped(Vec2::new(wrap_pm1(u), if self.tile { wrap_pm1(v) } else { v }))
+        } else {
+            self.alpha.sample_periodic(Vec2::new(u, v), self.tile)
+        };
+        if self.invert { (1.0 - value).clamp(0.0, 1.0) } else { value }
     }
 }
 
@@ -700,6 +716,8 @@ struct Dab {
     sag: Vec3,
     /// Arc length along the stroke to this dab centre (Roll).
     path_dist: f32,
+    roll_radius: f32,
+    legacy_alpha: bool,
 }
 
 /// Pull `drag` (a movement in the view plane) onto `normal`: its length
@@ -947,6 +965,10 @@ pub struct Stroke {
     layer: LayerState,
     dab_count: u32,
     alpha: Option<AlphaStamp>,
+    legacy_alpha: bool,
+    /// A directional alpha needs motion before its initial dab can turn.
+    start_sample: Option<(StrokeSample, (f32, f32))>,
+    start_direction: Vec3,
     /// Arc length of dabs placed so far (for Roll).
     path_length: f32,
     /// Seed for alpha rotate jitter (separate from spray RNG).
@@ -996,6 +1018,9 @@ impl Stroke {
             layer: LayerState::default(),
             dab_count: 0,
             alpha: None,
+            legacy_alpha: false,
+            start_sample: None,
+            start_direction: Vec3::ZERO,
             path_length: 0.0,
             rotate_jitter_seed: 0,
             view: Vec3::ZERO,
@@ -1093,6 +1118,7 @@ impl Stroke {
             paint_jitter: self.paint_jitter,
             paint_seed: self.paint_seed,
             rotate_jitter_seed: self.rotate_jitter_seed,
+            legacy_alpha: self.legacy_alpha,
             alpha: self.alpha.clone(),
             events,
         })
@@ -1138,6 +1164,11 @@ impl Stroke {
     }
 
     /// Shape every dab with an alpha.
+    pub(crate) fn with_legacy_alpha(mut self, legacy: bool) -> Self {
+        self.legacy_alpha = legacy;
+        self
+    }
+
     pub fn with_alpha(mut self, alpha: Option<AlphaStamp>) -> Self {
         self.alpha = alpha;
         self
@@ -1246,9 +1277,25 @@ impl Stroke {
         let Some(last) = self.last else {
             self.last = Some(sample);
             self.carry = 0.0;
-            self.apply_dab(mesh, sample, touch);
+            if !self.legacy_alpha && self.alpha.as_ref().is_some_and(|a| a.follow_stroke || a.roll) {
+                self.start_sample = Some((sample, self.modulation));
+            } else {
+                self.apply_dab(mesh, sample, touch);
+            }
             return;
         };
+        if let Some((first, _)) = self.start_sample {
+            let motion = sample.position - first.position;
+            let direction = motion - first.normal * motion.dot(first.normal);
+            if direction.length_squared() <= 1e-16 {
+                // Keep the press location and pressure through duplicate
+                // samples until a tangent direction is available.
+                return;
+            }
+            self.start_direction = direction.normalize();
+            self.finish(mesh, touch);
+            self.start_direction = Vec3::ZERO;
+        }
         let nominal = (self.settings.radius * self.settings.spacing).max(1e-6);
         let seg = sample.position - last.position;
         let len = seg.length();
@@ -1286,6 +1333,16 @@ impl Stroke {
         self.last = Some(sample);
     }
 
+    /// Finish any pending dab. A click with a directional alpha still
+    /// stamps once, using the camera orientation when there was no motion.
+    pub fn finish(&mut self, mesh: &mut Mesh, touch: &mut dyn FnMut(&Mesh, u32)) {
+        if let Some((sample, modulation)) = self.start_sample.take() {
+            let after = std::mem::replace(&mut self.modulation, modulation);
+            self.apply_dab(mesh, sample, touch);
+            self.modulation = after;
+        }
+    }
+
     /// A stamp (Stamp stroke mode): one dab at `sample`, applied `repeats`
     /// times in place, so it builds up like the dabs of a short freehand
     /// stroke over the same spot instead of moving the surface the tenth of
@@ -1321,8 +1378,9 @@ impl Stroke {
         let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
         let n = s.normal;
         let follow = self.alpha.as_ref().is_some_and(|a| a.follow_stroke || a.roll);
+        let alpha_dir = if direction == Vec3::ZERO { self.start_direction } else { direction };
         let (tangent, bitangent) = match &self.alpha {
-            Some(_) if follow && direction != Vec3::ZERO => (direction, n.cross(direction)),
+            Some(_) if follow && alpha_dir != Vec3::ZERO => (alpha_dir, n.cross(alpha_dir)),
             other => {
                 let up = other.as_ref().map_or(Vec3::Y, |a| a.up);
                 let mut b = up - n * up.dot(n);
@@ -1346,6 +1404,8 @@ impl Stroke {
             view: self.view,
             sag: self.sag(radius, strength),
             path_dist,
+            roll_radius: if self.legacy_alpha { radius } else { self.settings.radius },
+            legacy_alpha: self.legacy_alpha,
         };
         dab.rotated(self.alpha.as_ref().map_or(0.0, |a| a.rotation))
     }
@@ -1963,7 +2023,16 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         falloff_profile(settings, dab.radius, d2, alpha.is_some())
     };
     let f = match alpha {
-        Some(a) => f * a.weight_at(offset, dab.tangent, dab.bitangent, dab.radius, dab.path_dist),
+        Some(a) => {
+            f * a.weight_at_axes(
+                offset.dot(dab.tangent),
+                offset.dot(dab.bitangent),
+                dab.radius,
+                dab.path_dist,
+                dab.roll_radius,
+                dab.legacy_alpha,
+            )
+        }
         None => f,
     };
     let mask = if settings.kind == BrushKind::Mask { 0.0 } else { mesh.mask[v as usize] };
@@ -2822,6 +2891,40 @@ mod tests {
             assert_eq!(preset::shape_from_key(preset::shape_key(shape)), Some(shape));
         }
         assert!(InsertShape::QuadSphere.build_mesh().quad_count() >= 500, "quads");
+    }
+
+    #[test]
+    fn first_directional_alpha_uses_the_drag_heading_from_its_first_dab() {
+        let plane = primitives::plane(32, 2.0);
+        let alpha =
+            Alpha { name: "Half".into(), size: 8, data: (0..64).map(|i| if i % 8 >= 4 { 1.0 } else { 0.0 }).collect() };
+        let alpha = AlphaStamp { follow_stroke: true, up: Vec3::Z, ..AlphaStamp::new(Arc::new(alpha)) };
+        let settings = BrushSettings { radius: 0.5, strength: 0.8, spacing: 1.0, ..Default::default() };
+        let anchor = StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 };
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(alpha));
+        let mut mesh = plane.clone();
+        stroke.add_sample(&mut mesh, anchor, &mut |_, _| {});
+        stroke.add_sample(&mut mesh, anchor, &mut |_, _| {});
+        assert_eq!(mesh.positions, plane.positions);
+        stroke.add_sample(&mut mesh, StrokeSample { position: Vec3::Z * 0.12, ..anchor }, &mut |_, _| {});
+        assert_eq!(stroke.dab_count(), 1);
+        let y_at = |z| {
+            let index = plane.positions.iter().position(|p| p.x == 0.0 && p.z == z).unwrap();
+            mesh.positions[index].y
+        };
+        assert!(y_at(0.25) > 0.005);
+        assert_eq!(y_at(-0.25), 0.0);
+    }
+
+    #[test]
+    fn rolls_filter_period_boundaries_without_changing_pitch_under_pressure() {
+        let alpha = Alpha { name: "Ramp".into(), size: 8, data: (0..64).map(|i| (i % 8) as f32 / 7.0).collect() };
+        let roll = AlphaStamp { roll: true, ..AlphaStamp::new(Arc::new(alpha)) };
+        let f = |u, path, radius| roll.weight_at_axes(u, 0.0, radius, path, 0.5, false);
+        let before_seam = f(0.499, 0.0, 0.5);
+        let after_seam = f(0.501, 0.0, 0.5);
+        assert!((before_seam - after_seam).abs() < 0.02, "{before_seam} → {after_seam}");
+        assert_eq!(f(0.15, 0.0, 0.5), f(0.0, 0.15, 0.22));
     }
 
     #[test]

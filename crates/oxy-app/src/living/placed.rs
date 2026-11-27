@@ -894,6 +894,7 @@ mod tests {
             paint_jitter: Default::default(),
             paint_seed: 0,
             rotate_jitter_seed: 0,
+            legacy_alpha: false,
             alpha: None,
             events,
         };
