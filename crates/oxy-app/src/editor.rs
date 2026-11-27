@@ -13115,6 +13115,39 @@ mod tests {
     }
 
     #[test]
+    fn oxyspheres_make_mesh_builds_five_fingers_from_one_palm() {
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        edit.resolution = 320;
+        edit.blend = 0.0;
+        edit.quad_subdivision = 1;
+        edit.armature = oxy_mesh::armature::Armature::new(Vec3::NEG_Y * 1.8, 0.27, None);
+        let palm = edit.armature.add_child(0, Vec3::ZERO, 0.31);
+        for x in [-0.72, -0.36, 0.0, 0.36, 0.72] {
+            let finger = edit.armature.add_child(palm, Vec3::new(x, 1.0, 0.0), 0.075);
+            edit.armature.add_child(finger, Vec3::new(x * 1.2, 1.5, 0.07), 0.06);
+        }
+        let armature = edit.armature.clone();
+
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert!(e.spheres.is_none(), "{}", e.status);
+        let output = e.scene.active();
+        let id = output.id;
+        let (quads, triangles) = output.mesh.quad_and_triangle_counts();
+        assert!(quads > 0);
+        assert_eq!(triangles, 0);
+        assert!(oxy_topo::check_watertight(&output.mesh));
+        assert!(e.scene.pieces.iter().any(|p| p.spheres.as_ref().is_some_and(|s| s.armature == armature)));
+        e.undo();
+        assert!(e.scene.get(id).is_none());
+        e.redo();
+        assert_eq!(e.scene.active().id, id);
+    }
+
+    #[test]
     fn rebuilding_an_unedited_quad_skin_updates_the_same_piece() {
         let mut e = editor();
         e.start_spheres();

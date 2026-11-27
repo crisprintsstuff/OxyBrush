@@ -1,6 +1,6 @@
 # RFC 0038 — OxySpheres quad base mesh
 
-**Status:** Accepted. Quad skin supports connected three-way junctions, Subdivision, Resolution, and Blend. Follow-up to [RFC 0034](0034-oxyspheres.md).
+**Status:** Accepted. Quad skin supports joints with up to six links, Subdivision, Resolution, and Blend. Follow-up to [RFC 0034](0034-oxyspheres.md).
 
 ## Summary
 
@@ -51,8 +51,8 @@ existing mesh intact. The user can choose the voxel skin for that armature.
 Keep the output choice session-local initially. The armature and generated
 mesh use the existing project representations.
 
-Higher-valence junctions, branch-specific controls, and artist-adjustable
-ring density are follow-up decisions. Intersecting limbs, coincident joints,
+Higher-valence junctions and ring density are covered in the follow-ups below.
+Branch-specific controls remain future work. Intersecting limbs, coincident joints,
 and links too short to fit a junction are explicit rejection cases for the
 first prototype.
 
@@ -73,6 +73,25 @@ above 160, including between junction collars.
 from the joint; `0.5` matches the previous fixed collar. Endpoints and
 limb radii stay put. Acute, wide and mirrored forks are validated across
 the range.
+
+### Hand and foot junctions
+
+Extend the direct ring construction to four through six links per sphere.
+The incoming forearm or ankle takes one port and up to five digits can attach
+to that same joint. Keep the socket radii close to the incoming limb and
+digit radii so a broad joint does not force every digit to start at palm
+width. Narrow sockets when short links need extra clearance. Move the collars
+outward as needed until each is a separate face of
+the junction hull. Reserve part of each link for the limb strip, including
+when it leads directly to another junction. Keep the existing three-way
+collar placement for older cages.
+
+Measure fit against the planes of the proposed collars. A small set of
+points inside those planes supports the bulk of the palm or heel as the cage
+subdivides. Remove the collar faces from the hull before the existing quad
+sweeps connect the digits. Validate the cage and the subdivided result
+through the existing mesh checks. Closely packed or overlapping digits can
+still require more room.
 
 ## Acceptance criteria
 
@@ -106,8 +125,12 @@ The connected-junction follow-up sweeps one quad strip between the facing
 collars, including through intermediate bends. Separate hull patches keep
 triangles local to each junction. An armature with two forks subdivides
 twice while staying closed. If the collars consume the shared link, the
-worker rejects the build and keeps the armature open for editing. For joints
-with four or more links, choose **Voxel skin**.
+worker rejects the build and keeps the armature open for editing.
+
+The five-finger hand fixture has 112 quads and 62 triangles in its cage.
+Two subdivision levels produce 2,536 quads. Tests exercise wider and
+narrower digit fans, mirrored hands, and a five-toe ankle. They also check
+that crowded links still fail before replacing a mesh.
 
 ## Alternatives
 

@@ -42,8 +42,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let upper = two_forks.add_child(bend, Vec3::Y * 3.0, 0.4);
     two_forks.add_child(upper, Vec3::new(2.0, 3.8, 0.0), 0.18);
 
+    let mut hand = Armature::new(Vec3::NEG_Y * 1.8, 0.27, None);
+    let wrist = hand.add_child(0, Vec3::ZERO, 0.31);
+    for (x, y, z, radius) in [
+        (-0.77, 0.62, 0.12, 0.11),
+        (-0.39, 0.98, 0.0, 0.094),
+        (-0.10, 1.12, -0.025, 0.088),
+        (0.21, 1.02, 0.01, 0.086),
+        (0.49, 0.86, 0.055, 0.076),
+    ] {
+        let digit = hand.add_child(wrist, Vec3::new(x, y, z), radius);
+        hand.add_child(digit, Vec3::new(x * 1.25, y + 0.48, z + 0.13), radius * 0.74);
+    }
+
     for (name, armature) in
-        [("bent", bent), ("acute", fork(0.8, 3.0)), ("wide", fork(2.5, 1.0)), ("two-forks", two_forks)]
+        [("bent", bent), ("acute", fork(0.8, 3.0)), ("wide", fork(2.5, 1.0)), ("two-forks", two_forks), ("hand", hand)]
     {
         let cage = quad_skin_armature(&armature, Default::default())?;
         let smooth = subdivide_levels(&cage, 2);

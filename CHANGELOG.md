@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **OxySpheres quad hands and feet.** An incoming limb and up to five fingers or toes can attach directly to one joint. Quad base mesh fits a separate loop around each link when the branches have room.
+
 ## [4.1.3] - 2026-11-27
 
 ### Added
