@@ -1095,7 +1095,7 @@ impl Editor {
                 projector.project(&mut mesh);
                 mr.set_active_positions(&mesh);
             }
-            Ok(crate::editor::JobResult::Levels { mesh, multires: Some(mr), previous: None })
+            Ok(crate::editor::JobResult::Levels { mesh, multires: Some(mr), previous: None, strokes: None })
         });
         self.status = format!("Projecting the sculpt onto the retopology mesh ({levels} levels, {tris} triangles)…");
     }
