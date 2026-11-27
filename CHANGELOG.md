@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-11-27
+
 ### Added
 
 - **Plugin geometry editing** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Repeated writes can share one Undo step. Change events identify their source, and desktop scene state includes the viewport light rig.
@@ -12,13 +14,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Python and MCP plugins** ([#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Patch selected vertices in one undo step, and display a temporary RGBA render that clears when the desktop camera, viewport dimensions, or scene changes.
 - **Also paint RGB Strength** ([#585](https://github.com/crisprintsstuff/OxyBrush/issues/585)). Set color opacity independently of sculpt strength. The value is kept per brush and travels with presets and stroke recipes.
 - **Gizmo pose layers** ([#600](https://github.com/crisprintsstuff/OxyBrush/issues/600)). Move, rotate, or scale unmasked geometry with Living strokes on to record a transform. Use Sculpt into to put it directly into a layer and fade between the neutral pose and the transform.
-- **OxySpheres quad base mesh** ([#467](https://github.com/crisprintsstuff/OxyBrush/pull/467)). Connect several three-way junctions in a single quad skin, including along bent links.
+- **OxySpheres quad base mesh** ([#628](https://github.com/crisprintsstuff/OxyBrush/pull/628)). Connect several three-way junctions in a single quad skin, including along bent links.
 - **OxySpheres branch posing** ([#626](https://github.com/crisprintsstuff/OxyBrush/issues/626)). Drag in Rotate mode to turn a sphere and its descendants around their parent. Use the Link axis to twist the branch. Mirrored limbs turn together.
 
 ### Changed
 
 - **Rebuild lower level** ([#611](https://github.com/crisprintsstuff/OxyBrush/issues/611)). Repeat recovery beneath the lowest subdivision level of a compatible closed quad mesh while keeping the current view and finer detail.
-- **OxyRemesh.** Open surfaces can use isoline extraction from fitted orientation-field charts when the charts are unfolded and cover enough of the surface.
+- **OxyRemesh** ([#589](https://github.com/crisprintsstuff/OxyBrush/pull/589), [#603](https://github.com/crisprintsstuff/OxyBrush/pull/603)). Build isoline cells at interior grid crossings and fit UV charts across integer-aligned seams. Accept fitted output when it passes coverage and topology checks. Closed inputs require a closed result.
 
 ### Fixed
 
@@ -26,27 +28,20 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Smooth brush** ([#624](https://github.com/crisprintsstuff/OxyBrush/issues/624)). Smooth, Shift Smooth, and auto-smooth follow the original polygon edges when available. Hidden triangulation diagonals no longer pull quad grids sideways.
 - **Windows startup** ([#577](https://github.com/crisprintsstuff/OxyBrush/issues/577)). Use Direct3D 12 on the reported Intel UHD Graphics 600 adapter to avoid a startup crash in the Intel Vulkan driver.
 - **Pen pressure** ([#581](https://github.com/crisprintsstuff/OxyBrush/issues/581)). Preserve light pen readings at stroke start and carry the last measured force through missing samples to avoid sudden full-size or full-strength dabs.
-- **Scene Project** ([#612](https://github.com/crisprintsstuff/OxyBrush/issues/612)). Reuse a ray index throughout the stamp gesture and compute large Stamp previews on a worker. The previous preview stays visible while the next one computes.
-
+- **Scene Project Stamp** ([#612](https://github.com/crisprintsstuff/OxyBrush/issues/612)). Reuse target meshes and their ray index throughout a stamp drag. Large previews compute on a worker while the previous preview stays visible.
 - **Brush presets** ([#605](https://github.com/crisprintsstuff/OxyBrush/issues/605)). Right-click a preset to open its actions within the library. Each row also has an actions button for sharing, renaming, duplicating and deleting presets.
 - **Curve cutters** ([#598](https://github.com/crisprintsstuff/OxyBrush/issues/598)). Plane Clip, Line Split and Cut Away follow a multi-point Curve. Choose Line to draw a straight cut.
-
-- **Scene Project Stamp.** Dragging to resize the stamp reuses the target meshes for the gesture, reducing preview work on dense scenes.
-
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
 - **Alpha rotation and Roll** ([#601](https://github.com/crisprintsstuff/OxyBrush/issues/601)). The thumbnail follows the rotation slider. Directional alphas align from the first dab, and Roll filters repeat seams and keeps its pitch steady as pressure changes the width.
 - **Sculpt Layers.** Sculpt and paint strokes stay editable when switching or adding subdivision levels. Strength changes affect fine geometry and color even from a lower level and survive Undo, Redo, and saving.
+- **Split view** ([#583](https://github.com/crisprintsstuff/OxyBrush/issues/583)). Both panes redraw and accept sculpting and navigation with their own camera. Reference images, grid orientation, and X-ray follow each pane.
+- **Poly Edit selection** ([#584](https://github.com/crisprintsstuff/OxyBrush/issues/584)). Box, Lasso, and Ellipse show an outline during the drag.
 
 ## [4.1.2] - 2026-11-26
 
 ### Fixed
 
 - **OxyRemesh Swiss cheese** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551), [#586](https://github.com/crisprintsstuff/OxyBrush/pull/586)). Closed inputs no longer get replaced by open/holey extracts. Dual extract densifies unit edges, collapses short dual edges / 3-cycles, fills short polygon holes, and seals remaining gaps (with a closed voxel remesh fallback when the field shell cannot enclose). After seal, keep the largest island so a watertight-but-shattered result is never returned as Ok. Isoline extract stays gated until coverage is good; full Autoremesher-quality parameterization remains RFC 0044 Phase 4.
-
-### Fixed
-
-- **Split view.** Each pane redraws with its own camera, accepts sculpt and navigation input, and displays references for its own view.
-- **Poly Edit selection.** Box, Lasso, and Ellipse show an outline during the drag.
 
 ## [4.1.1] - 2026-11-26
 

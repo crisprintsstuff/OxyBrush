@@ -100,11 +100,9 @@ to test on open and closed fixtures. The first field fit combs equivalent
 quarter turns along the vertex graph. It rejects any edge that still needs a
 different quarter turn after combing and relaxes a least-squares fit of UV
 edge differences. Triangle charts use integer offsets of those shared
-coordinates. Open inputs can use the fitted charts when they are unfolded and pass the
-face-count and boundary checks. Closed inputs still use the existing lattice
-and dual-extraction paths. Cutting at field
-singularities, solving for independent chart transitions, and measuring
-coverage on curved sculpts remain open.
+coordinates. This uncut fit applies to open inputs when the charts are
+unfolded and pass the face-count and boundary checks. The cut-chart path below
+also tests closed inputs.
 
 The cut-topology builder splits triangle corner fans at designated interior
 edges and pairs the resulting UV endpoints by source vertex. This gives the

@@ -95,14 +95,14 @@ Everything in the palette is also in the menus; the palette just saves you looki
 - Freehand follows the pointer.\n\
 - Line draws a straight line from where you press to where you release.\n\
 - Stamp places a single dab: drag out from where you press to size it (good with alphas).\n\
-- Curve draws a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the Fade in / Fade out sliders update it live. Accept (Enter) applies it as one undo step, as does starting the next stroke; Cancel (Esc) discards it. You can orbit around it while it is open.\n\
+- Curve draws a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Drag the window by its title bar to move it. Size, strength and the Fade in / Fade out sliders update it live. Accept (Enter) applies it as one undo step, as does starting the next stroke; Cancel (Esc) discards it. You can orbit around it while it is open.\n\
 - In Freehand mode, hold the pen or mouse still for about half a second while drawing: a ring fills up at the cursor and the stroke becomes a curve; keep moving to extend it. Turn this off with Hold to adjust in the Stroke section, or tick Ask first to be asked each time.\n\
 - Edit > Last stroke can Replay the Freehand stroke you just made (stamp it again without undoing), or reopen it: Edit as curve (same brush, editable, Enter applies it), Use as Curve Move curve, or Use as tube path. Replay stays available until remesh or a new freehand stroke; Edit as curve works right after the stroke, even if you've turned the view since.\n\
 - While a curve is open, click a point to give it its own size and strength (a ring shows the size), tick Join the ends for a loop, and use Ctrl+Z / Ctrl+Shift+Z to undo and redo your curve edits.\n\n\
-The Spray slider scatters dabs around the stroke. The Stabilizer slider makes the brush trail behind the pointer for smooth, controlled lines. Alphas shape each dab: pick one in the Alpha section (built-ins include overlapping Scales, Snake scales, Diamond scales, Scale plate for Stamp, and Scale strip for Roll), or load your own grayscale PNG.\n\
+The Spray slider scatters dabs around the stroke. The Stabilizer slider makes the brush trail behind the pointer for smooth, controlled lines. Alphas shape each dab: pick one in the Alpha section (built-ins include overlapping Scales, Snake scales, Diamond scales, Scale plate for Stamp, and Scale strip for Roll), or load your own PNG, JPEG, TIFF, WebP, or an 8- or 16-bit grayscale or RGB PSD with a saved composite.\n\
 - Tile wraps a seamless pattern inside each dab; Repeats sets how many periods fit across the brush.\n\
-- Roll scrolls the alpha along the stroke like a paint roller (best with a tileable strip such as Scale strip); Roll distance stretches or compresses the pattern. Follow stroke direction stays on while rolling.\n\
-- Rotate jitter turns the alpha randomly each stroke or each dab.\n\nCapture from view (in the Alpha section, or the command palette) makes an alpha from what you see: a depth image of the model in the middle of the view, nearest parts white, cropped to the model, at the size picked next to the button (up to 4096 px; bigger gives smoother edges). Sculpt or arrange a detail (a rivet, a scale, a button), look at it straight on, capture it, then stamp it anywhere with Stamp strokes. Captured and loaded alphas are saved with the project, and come back when you open it. Export alpha… saves the selected alpha as a 16-bit grayscale PNG, to use in other projects or edit in a 2D app and load it back with Load image….",
+- Roll scrolls the alpha along the stroke like a paint roller, best with a tileable strip such as Scale strip. Roll distance sets the length of each repeat. Type a value and press Enter to set it exactly. Follow stroke direction stays on while rolling.\n\
+- Rotation turns the alpha and updates its thumbnail as you adjust it. Rotate jitter turns the alpha randomly each stroke or each dab.\n\nCapture from view (in the Alpha section, or the command palette) makes an alpha from what you see: a depth image of the model in the middle of the view, nearest parts white, cropped to the model, at the size picked next to the button (up to 4096 px; bigger gives smoother edges). Sculpt or arrange a detail (a rivet, a scale, a button), look at it straight on, capture it, then stamp it anywhere with Stamp strokes. Captured and loaded alphas are saved with the project, and come back when you open it. Export alpha… saves the selected alpha as a 16-bit grayscale PNG, to use in other projects or edit in a 2D app and load it back with Load image….",
     },
     Topic {
         title: "Symmetry",
@@ -125,8 +125,9 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Exporting to glTF or GLB writes each group as a shape key (morph target) named after it, on the piece without the groups: in Blender or a game engine the groups are sliders. Hidden groups are in the file at 0. Other formats get the surface as you see it.\n\
 - Later strokes keep what they did: a stroke's change is added or taken away, not replayed, so a stroke smoothed over later can look different when faded.\n\
 - Every change is an undo step. Undoing a stroke hides it from the list, and redo brings it back.\n\
-- A remesh, a subdivision level change, dynamic detail or anything else that changes the triangles keeps the surface and clears the list (it's baked). Bake all does that by hand; the oldest strokes are baked when the list passes its memory budget (Preferences).\n\
+- Adding or switching subdivision levels keeps sculpt and paint layers editable. A remesh, dynamic detail, or another operation that replaces the topology bakes the strokes into the surface. Bake all does that by hand. The oldest strokes are baked when the list passes its memory budget (Preferences).\n\
 - Strokes and groups are saved with the project, so they stay editable after you reopen it (turn off Preferences > General > Save strokes with the project for smaller files). Versions before 4.0.0-beta.9 open such files with the strokes fixed in place.\n\
+- With Living strokes on, a masked gizmo pose can be saved to a layer so you can fade it afterward. With Also paint on, RGB Strength controls the paint independently of the sculpt strength.\n\
 - Mask strokes aren't listed.",
     },
     Topic {
@@ -233,7 +234,7 @@ The fields under the gizmo show how far it has moved, turned or scaled since the
         title: "Bending with Curve Move",
         keywords: "curve move bend pose arm tail limb deform stretch wire",
         body: "Curve Move bends and stretches a long part (an arm, a tail, a horn) along a curve. Pick it from the brushes, draw a curve along the part, then drag the curve's points: the part follows, bending smoothly. With Through the middle on, the curve runs through the part's core rather than over its skin.\n\n\
-Size sets how far from the curve the model follows: make the circle cover the part's thickness so it moves as a whole. Masked areas never move, and symmetry moves the mirrored side too. Click the curve to add a point, Alt+click to remove one, select a point to change its reach and strength there, and Reset to start over. Enter applies it as one undo step; Esc cancels.",
+Size sets how far from the curve the model follows: make the circle cover the part's thickness so it moves as a whole. Masked areas never move, and symmetry moves the mirrored side too. Click the curve to add a point, Alt+click to remove one, select a point to change its reach and strength there, and Reset to start over. Drag the Curve Move window by its title bar to move it. Enter applies it as one undo step; Esc cancels.",
     },
     Topic {
         title: "Subdivision levels",
@@ -241,6 +242,8 @@ Size sets how far from the curve the model follows: make the circle cover the pa
         body: "Ctrl+D adds a subdivision level: four times the triangles, for finer detail. D and Shift+D move up and down between levels. Make broad changes on a low level and fine detail on a high one; the detail follows when you go back up.\n\n\
 Levels are made of quads by default (Catmull–Clark): every polygon becomes quads, so the edge loops of a quad base mesh carry on up and every level exports as quads. A triangle becomes three quads. Choose Triangles (Loop: each triangle becomes four) under Subdivision levels in the Topology panel before adding the first level; a piece keeps the kind its levels were made with. Poly Edit creases stay sharp in the levels. The same choice applies to Mesh > Subdivide.\n\n\
 Smooth (on by default) rounds each new level off. Turn it off to only split the faces, with new points at the middle of edges and faces, so the shape stays exactly as it is: good for hard-surface pieces or for more resolution without softening. Each level keeps how it was made.\n\n\
+Rebuild lower level in Topology recovers a coarser base from a compatible closed Catmull–Clark quad mesh without UVs or explicit creases. Bake editable strokes first. Repeat it to recover another level when the base still qualifies. The displayed level keeps its detail.\n\
+\n\
 Remesh and decimate rebuild the mesh, so they remove the levels (undo brings them back).",
     },
     Topic {
@@ -251,7 +254,7 @@ Remesh and decimate rebuild the mesh, so they remove the levels (undo brings the
     Topic {
         title: "Brush favorites and presets",
         keywords: "favorites favourites star shelf preset rename duplicate palette brush editor custom shelves",
-        body: "Right-click a brush on the shelf and choose Add to Favorites to pin it on the Favorites strip above the full list. Presets… lets you star saved presets (they sort to the top), rename or duplicate them, and share codes or files. Ctrl+K or Space finds Preset: entries by name.",
+        body: "Right-click a brush on the shelf and choose Add to Favorites to pin it on the Favorites strip above the full list. In Presets…, right-click a saved preset or use its row action button to star, rename, duplicate, or share it. Starred presets sort to the top. Ctrl+K or Space finds Preset: entries by name.",
     },
     Topic {
         title: "Dynamic detail",
@@ -283,13 +286,14 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
 - Drag from a sphere to pull out a new one. A click without dragging only picks a sphere, for the Radius slider.\n\
 - Shift+drag a sphere to move it; Ctrl+drag it up or down to make it bigger or smaller. The window's Move and Size modes make that the plain drag. With Spheres below follow, moving a sphere moves the ones hanging from it.\n\
 - Click the line between two spheres to put a sphere on it.\n\
+- In Rotate mode, drag from a sphere or link to turn the branch around its parent. Choose Link as the axis to twist along the limb. With Mirror across X on, reflected branches turn together.\n\
 - Alt+click a sphere, or pick it and press Delete, to remove it with the spheres below it. The first sphere stays.\n\
 - Drag away from the spheres to orbit.\n\
 - Mirror across X (on when X symmetry is) adds, moves, resizes and removes spheres on both sides of the plane through the first sphere.\n\
-- The viewport shows the mesh as it will be, a little coarser; turn off Show the mesh to see the plain spheres. Each sphere's outline is drawn over it.\n\
-- Resolution sets how fine the mesh is; Blend how round the joins between links are.\n\
+- Voxel skin can preview a coarser version of the mesh with Show the mesh. Quad base mesh previews the spheres and builds edge loops along chains and connected three-way junctions when you choose Make mesh. Use Subdivision to smooth the quad mesh.\n\
+- Resolution sets voxel detail or the density of rings along the quad limbs. Blend sets how soft the joins are.\n\
 - While the spheres are open, Undo and Redo step through their edits; undoing past the first edit closes them.\n\n\
-The spheres are a piece of their own (an OxySpheres piece, with a sphere icon in the Pieces list), never used up. Make mesh (or Enter) adds a new piece made from them and keeps them, hidden out of its way; Make mesh again after changing them updates that mesh, as long as you haven't sculpted it, and once you have, it adds a new piece so your sculpting stays. Thin parts are made finer automatically, so they come out round; Done keeps them as they are without making a mesh; Cancel (or Esc) leaves them as they were (or discards new ones). Each is one undo step. To change them again and make another mesh, pick the OxySpheres piece and click it, or use Pieces > Edit OxySpheres…, however much the meshes made from them were sculpted since. They are saved with the project.",
+The spheres are a piece of their own (an OxySpheres piece, with a sphere icon in the Pieces list), never used up. Make mesh (or Enter) adds a new piece made from them and keeps them, hidden out of its way; Make mesh again after changing them updates that mesh, as long as you haven't sculpted it, and once you have, it adds a new piece so your sculpting stays. Voxel skin makes thin parts finer automatically so they come out round. Keep spheres saves them without making a mesh. Cancel (or Esc) leaves them as they were or discards new ones. Each is one undo step. To change them again and make another mesh, pick the OxySpheres piece and click it, or use Pieces > Edit OxySpheres…, however much the meshes made from them were sculpted since. They are saved with the project.",
     },
     Topic {
         title: "Poly Edit (model polygons)",
@@ -318,6 +322,7 @@ Y repeats the last action, with the same amount, on whatever is under the pointe
 - Click to place a point. Drag a point, edge or face to slide it along the surface; drop a point on another to weld them.\n\
 - Hold Shift: the quad the nearest points make shows in green (a triangle in purple). Shift+click makes it. Shift+drag relaxes the points under the cursor.\n\
 - Tab+drag a border edge to pull out a new quad. Ctrl+click an edge to insert an edge loop across it. Ctrl+Shift+click deletes a point or face.\n\
+- In Contour mode, drag successive cuts across a limb to build rings and connect them with quads. Choose New strip before starting a separate run.\n\
 - Alt+click a point, edge or face to pin its points (shown as orange squares): relaxing leaves them where they are, though you can still drag them. Alt+click again, or Unpin all in the window, to free them.\n\
 - Mirror across X (in the window, on when X symmetry is) repeats everything on the other side; points near the centre snap onto it.\n\n\
 Subdivide and project (in the window) adds subdivision levels moved onto the sculpt: the top level carries its detail, level 1 stays your quads. The first face makes a new piece, Retopo. Each action is one undo step, it is saved with the project, and its quads export as quads (OBJ). Done (or Esc) closes the tool; open it again with the sculpt or the Retopo piece active to carry on.",
@@ -341,7 +346,9 @@ While the Lights window is open, numbered dots show the lights in the viewport: 
         keywords: "topology voxel rebuild reduce polygons triangles resolution shell hollow thickness wall holes project detail reproject shrinkwrap",
         body: "Voxel remesh (Ctrl+R) rebuilds the active piece with even triangles, so stretched areas sculpt well again. Resolution sets how fine the new mesh is.\n\n\
 A closed model is filled solid. A model with holes has them patched first, so it comes out solid too; an open sheet (a plane, a flat patch) has nothing inside to fill, and the status bar says so. For a wall instead, tick Shell: set its Thickness (in scene units; a standard-size piece is 2 across) and which way the wall goes from the surface (Outward, Both sides or Inward). A sheet gets that thickness; a closed model comes out hollow. Make the wall at least two voxels thick, or raise the resolution.\n\n\
-Decimate reduces the triangle count to the Keep percentage while preserving the shape, for export or to lighten a heavy piece. Both run in the background and can be undone.\n\n\
+OxyRemesh in the Topology panel generates a quad-dominant mesh. It tests fitted charts with integer-aligned seams and falls back to other extraction paths if coverage or topology checks fail. A closed sculpt needs a closed result.\n\
+\n\
+Decimate reduces the triangle count to the Keep percentage while preserving the shape, for export or to lighten a heavy piece. These operations run in the background and can be undone.\n\n\
 **Project detail** (Mesh menu, Topology > Project detail, or the command palette) moves every vertex of the active piece onto the closest point of the other visible pieces, so a clean remesh or cage picks up a high-detail sculpt without changing its triangles. Mesh > Project onto… picks one source piece instead. Subdivision levels are removed; one undo step. For projecting under the brush only, use the Scene Project brush. Retopology's Subdivide and project still builds subdivision levels on a drawn quad mesh.",
     },
     Topic {
