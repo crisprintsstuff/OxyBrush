@@ -337,19 +337,18 @@ impl CombedField {
     }
 }
 
-fn comb_field(g: &Graph, orientations: &[Vec3]) -> CombedField {
-    let normals: Vec<_> = g.normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
+fn comb_field(normals: &[Vec3], orientations: &[Vec3], mut neighbors: Vec<Vec<u32>>) -> CombedField {
+    let normals: Vec<_> = normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
     let mut frames: Vec<_> = normals
         .iter()
         .zip(orientations)
         .map(|(&normal, &orientation)| project_tangent(orientation, normal).normalize_or(tangent_basis(normal).0))
         .collect();
-    let mut neighbors = g.neighbors.clone();
     neighbors.iter_mut().for_each(|row| row.sort_unstable());
-    let mut seen = vec![false; g.len()];
-    let mut traversal = Vec::with_capacity(g.len());
+    let mut seen = vec![false; normals.len()];
+    let mut traversal = Vec::with_capacity(normals.len());
     let mut queue = std::collections::VecDeque::new();
-    for root in 0..g.len() {
+    for root in 0..normals.len() {
         if seen[root] {
             continue;
         }
@@ -386,11 +385,14 @@ pub fn prepare_uv_cuts(
         return None;
     }
     let graph = Graph::from_mesh(mesh, sharp_angle_deg);
-    let field = comb_field(&graph, orientations);
+    prepare_cuts(&mesh.triangles, &comb_field(&graph.normals, orientations, graph.neighbors))
+}
+
+fn prepare_cuts(triangles: &[[u32; 3]], field: &CombedField) -> Option<crate::uv_cut::UvCutTopology> {
     let residual: HashSet<_> = field.residual_edges().collect();
     let mut seen = HashSet::with_capacity(residual.len());
     let mut seams = Vec::with_capacity(residual.len());
-    for &[a, b, c] in &mesh.triangles {
+    for &[a, b, c] in triangles {
         for [a, b] in [[a, b], [b, c], [c, a]] {
             let edge = [a.min(b), a.max(b)];
             if residual.contains(&edge) && !seen.insert(edge) {
@@ -398,25 +400,35 @@ pub fn prepare_uv_cuts(
             }
         }
     }
-    crate::uv_cut::UvCutTopology::complete(&mesh.triangles, &seams)
+    crate::uv_cut::UvCutTopology::complete(triangles, &seams)
 }
 
 /// Fit UV differences on each connected component. Residual quarter turns
 /// require a seam that this continuous fit cannot represent.
 fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Option<Vec<[Vec2; 3]>> {
-    let field = comb_field(g, orientations);
+    let field = comb_field(&g.normals, orientations, g.neighbors.clone());
     if field.residual_edges().next().is_some() {
         return None;
     }
+    let uv = fit_field_coordinates(&g.positions, field, rho);
+    Some(triangles.iter().map(|t| rebase_chart(t.map(|v| uv[v as usize]))).collect())
+}
+
+fn rebase_chart(chart: [Vec2; 3]) -> [Vec2; 3] {
+    let offset = chart[0].floor();
+    chart.map(|uv| uv - offset)
+}
+
+fn fit_field_coordinates(positions: &[Vec3], field: CombedField, rho: f32) -> Vec<Vec2> {
     let CombedField { normals, frames, neighbors, traversal } = field;
     let edge_step = |i: usize, j: usize| {
-        let edge = (g.positions[j] - g.positions[i]) / rho;
+        let edge = (positions[j] - positions[i]) / rho;
         let along = (frames[i] + frames[j]) * 0.5;
         let across = (normals[i].cross(frames[i]) + normals[j].cross(frames[j])) * 0.5;
         Vec2::new(edge.dot(along), edge.dot(across))
     };
-    let mut coordinates = vec![Vec2::ZERO; g.len()];
-    let mut anchored = vec![false; g.len()];
+    let mut coordinates = vec![Vec2::ZERO; positions.len()];
+    let mut anchored = vec![false; positions.len()];
     for (i, parent) in traversal {
         if let Some(j) = parent {
             coordinates[i] = coordinates[j] + edge_step(j, i);
@@ -439,16 +451,34 @@ fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rh
         }
     }
 
-    Some(
-        triangles
-            .iter()
-            .map(|triangle| {
-                let chart = triangle.map(|v| coordinates[v as usize]);
-                let offset = chart[0].floor();
-                chart.map(|uv| uv - offset)
-            })
-            .collect(),
-    )
+    coordinates
+}
+
+fn fit_cut_charts(
+    cut: &crate::uv_cut::UvCutTopology,
+    graph: &Graph,
+    orientations: &[Vec3],
+    rho: f32,
+) -> Option<Vec<[Vec2; 3]>> {
+    let gather = |values: &[Vec3]| -> Vec<Vec3> { cut.source_vertices.iter().map(|&v| values[v as usize]).collect() };
+    let positions = gather(&graph.positions);
+    let normals = gather(&graph.normals);
+    let orientations = gather(orientations);
+    let mut neighbors = vec![Vec::new(); positions.len()];
+    for &[a, b, c] in &cut.triangles {
+        for [a, b] in [[a, b], [b, c], [c, a]] {
+            neighbors[a].push(u32::try_from(b).ok()?);
+            neighbors[b].push(u32::try_from(a).ok()?);
+        }
+    }
+    for row in &mut neighbors {
+        row.sort_unstable();
+        row.dedup();
+    }
+    let field = comb_field(&normals, &orientations, neighbors);
+    let initial = fit_field_coordinates(&positions, field, rho);
+    let fitted = cut.fit_automatic_seam_uvs(&initial)?;
+    Some(cut.triangles.iter().map(|t| rebase_chart(t.map(|v| fitted[v]))).collect())
 }
 
 fn build_field_uvs(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Vec<glam::Vec2> {
@@ -507,6 +537,22 @@ fn extract_with_isoline(
             return Ok(Extracted { positions: iso.positions, faces: iso.faces });
         }
     }
+    let field = comb_field(&graph.normals, o, graph.neighbors.clone());
+    if let Some(cut) = prepare_cuts(&mesh.triangles, &field)
+        && !cut.seams.is_empty()
+        && let Some(charts) = fit_cut_charts(&cut, graph, o, rho)
+        && charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 1e-6)
+        && let Some(iso) =
+            crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, rho)
+        && iso.faces.len() >= min_faces
+    {
+        let counts = polygon_edge_counts(&iso.faces);
+        let boundary = counts.values().filter(|&&count| count == 1).count();
+        let boundary_ok = if input_watertight { boundary == 0 } else { boundary < iso.faces.len() / 2 };
+        if boundary_ok && counts.values().all(|&count| count <= 2) {
+            return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        }
+    }
     let field_uvs = build_field_uvs(graph, o, p, rho);
     if let Some(iso) = crate::isoline_extract::extract_isoline_mesh(&graph.positions, &mesh.triangles, &field_uvs, rho)
     {
@@ -519,7 +565,11 @@ fn extract_with_isoline(
 }
 
 fn polygon_boundary_edges(faces: &[Vec<u32>]) -> usize {
-    let mut he: HashMap<(u32, u32), i32> = HashMap::new();
+    polygon_edge_counts(faces).values().filter(|&&count| count == 1).count()
+}
+
+fn polygon_edge_counts(faces: &[Vec<u32>]) -> HashMap<(u32, u32), usize> {
+    let mut he: HashMap<(u32, u32), usize> = HashMap::new();
     for f in faces {
         let n = f.len();
         for i in 0..n {
@@ -529,7 +579,7 @@ fn polygon_boundary_edges(faces: &[Vec<u32>]) -> usize {
             *he.entry(key).or_default() += 1;
         }
     }
-    he.values().filter(|&&c| c == 1).count()
+    he
 }
 
 /// Component count and triangle counts per root (descending).
@@ -1875,6 +1925,19 @@ mod tests {
             first.map(|i| mesh.positions[cut.source_vertices[i] as usize]).into_iter().sum::<Vec3>(),
             Vec3::X + Vec3::Y
         );
+    }
+
+    #[test]
+    fn fitted_cut_charts_extract_on_both_sides_of_a_diagonal() {
+        let mesh = primitives::plane(1, 16.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let diagonal: Vec<_> = mesh.triangles[0].into_iter().filter(|v| mesh.triangles[1].contains(v)).collect();
+        let cut = crate::uv_cut::UvCutTopology::from_seams(&mesh.triangles, &[[diagonal[0], diagonal[1]]]).unwrap();
+        let charts = fit_cut_charts(&cut, &graph, &vec![Vec3::X; graph.len()], 1.0).unwrap();
+        assert!(charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 0.0));
+        let out = crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, 1.0)
+            .expect("aligned charts must pass seam validation");
+        assert!(out.faces.len() > 128, "extract must cover both halves");
     }
 
     #[test]

@@ -115,8 +115,11 @@ disk. This can add more cuts than a shortest-cut method. A seam fit now enforces
 on the cut vertices. It projects an initial UV estimate onto the shared
 constraints and rejects inconsistent cycles. An automatic first pass now chooses the quarter turn and rounded offset
 with the least squared error at the two seam endpoints. The joint fit
-rejects incompatible choices. A field-derived initial fit for cut charts,
-joint integer optimization, and integration with extraction remain open.
+rejects incompatible choices. The cut mesh gets its initial coordinates from the orientation field. Fitted
+charts enter isoline extraction when seam constraints agree and the UVs
+are unfolded. Closed inputs require a boundary-free candidate. Existing
+extraction paths handle rejected candidates. Joint integer optimization and
+coverage on curved sculpts remain open.
 
 ## Verification
 
