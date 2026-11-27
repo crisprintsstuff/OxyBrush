@@ -337,11 +337,26 @@ struct Attributes {
 /// Sparse position deltas in the subdivision order of the source level.
 /// Keep this record when switching levels and project it through the same
 /// subdivision stack whenever the displayed mesh changes.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LevelDisplacements {
     level: usize,
     points: usize,
     deltas: Vec<(u32, Vec3)>,
+}
+
+impl LevelDisplacements {
+    pub fn parts(&self) -> (usize, usize, &[(u32, Vec3)]) {
+        (self.level, self.points, &self.deltas)
+    }
+
+    pub fn from_parts(level: usize, points: usize, deltas: Vec<(u32, Vec3)>) -> Option<Self> {
+        if deltas.iter().any(|&(v, d)| v as usize >= points || !d.is_finite())
+            || deltas.windows(2).any(|p| p[0].0 >= p[1].0)
+        {
+            return None;
+        }
+        Some(Self { level, points, deltas })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -678,7 +693,7 @@ impl Multires {
     /// Project a record from this stack into the current mesh's vertex order.
     /// The native record stays intact, including edits on fine-only vertices.
     pub fn project_displacements(&self, mesh: &Mesh, record: &LevelDisplacements) -> Option<Vec<(u32, Vec3)>> {
-        if !self.is_bound_to(mesh) {
+        if !self.is_bound_to(mesh) || self.levels.get(record.level)?.positions.len() != record.points {
             return None;
         }
         let mut native = vec![Vec3::ZERO; record.points];

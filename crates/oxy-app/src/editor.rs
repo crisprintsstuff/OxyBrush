@@ -7847,7 +7847,14 @@ impl Editor {
             return;
         }
         self.pointer_up();
-        if matches!(change, LevelChange::Set(_)) && self.subdivision_would_bake_strokes() {
+        if matches!(change, LevelChange::DeleteHigher | LevelChange::DeleteLower | LevelChange::KeepOnly)
+            && self
+                .living
+                .strokes
+                .iter()
+                .any(|stroke| stroke.piece == self.scene.active().id && stroke.has_native_level())
+            && self.subdivision_would_bake_strokes()
+        {
             return;
         }
         let background = result_triangles > self.level_job_triangles;
@@ -7858,7 +7865,7 @@ impl Editor {
         };
         self.living_end_drag();
         let piece = self.scene.active();
-        let records = if matches!(change, LevelChange::Add { .. }) {
+        let records = if matches!(change, LevelChange::Add { .. } | LevelChange::Set(_)) {
             let stack = fresh.as_ref().or(piece.multires.as_ref()).expect("subdivision stack");
             let Some(records) = self.living.capture_for_subdivision(piece, stack) else {
                 self.subdivision_would_bake_strokes();
@@ -7949,7 +7956,7 @@ impl Editor {
         if let Some((_, _, records)) = strokes
             && let Some(entry) = doc.history.newest_id()
         {
-            doc.living.added_subdivision(entry, doc.scene.active(), records);
+            doc.living.project_level_strokes(entry, doc.scene.active(), records);
         }
         self.status = format!("{label}: level {} of {count}, {tris} triangles", active + 1);
     }
@@ -9028,7 +9035,7 @@ impl Editor {
                 if let Some((_, _, records)) = strokes
                     && let Some(entry) = doc.history.newest_id()
                 {
-                    doc.living.added_subdivision(entry, &doc.scene.pieces[index], records);
+                    doc.living.project_level_strokes(entry, &doc.scene.pieces[index], records);
                 }
                 match level {
                     Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
@@ -18490,7 +18497,6 @@ mod tests {
         let before = e.scene.active().mesh.positions.clone();
         let revision = e.history.revision();
 
-        e.step_level(-1);
         e.subdivide(false);
         e.subdivide_background(false);
         e.living_sync();
@@ -18528,6 +18534,53 @@ mod tests {
         let before = e.scene.active().mesh.positions.clone();
         e.living_set_strength(0.0);
         assert_ne!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn fine_layer_strength_survives_coarse_view_undo_and_reopen() {
+        let mut e = with_living();
+        e.add_level();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        let base = e.scene.active().mesh.positions.clone();
+        draw_curve(&mut e);
+        e.accept_curve();
+        let id = e.living.listed(e.scene.active().id)[0].id;
+        let full = e.scene.active().mesh.positions.clone();
+        assert_ne!(base, full);
+        e.step_level(-1);
+        e.living_sync();
+        assert_eq!(e.multires_level(), Some((0, 2)));
+        e.living.selected = [id].into();
+        e.living_set_strength(0.0);
+        e.undo();
+        assert_eq!(e.living.listed(e.scene.active().id)[0].strength, 1.0);
+        e.redo();
+        assert_eq!(e.living.listed(e.scene.active().id)[0].strength, 0.0);
+        let bytes = format::encode(&e.scene_data());
+
+        let mut reopened = with_living();
+        let scene = Scene::from_data(format::decode(&bytes).unwrap()).unwrap();
+        reopened.replace_document(scene, None);
+        assert_eq!(reopened.multires_level(), Some((0, 2)));
+        let id = reopened.living.listed(reopened.scene.active().id)[0].id;
+        reopened.living.selected = [id].into();
+        reopened.living_set_strength(0.5);
+        reopened.step_level(1);
+        reopened.living_sync();
+        assert_eq!(reopened.multires_level(), Some((1, 2)));
+        assert_eq!(reopened.living.listed(reopened.scene.active().id)[0].strength, 0.5);
+        let by_position = |points: Vec<Vec3>| {
+            let mut points: Vec<_> = points.into_iter().map(|p| (p * 1e4).round().as_ivec3().to_array()).collect();
+            points.sort_unstable();
+            points
+        };
+        let half: Vec<_> = base.iter().zip(full).map(|(&a, b)| a.lerp(b, 0.5)).collect();
+        let mut expected = by_position(half);
+        let got = by_position(reopened.scene.active().mesh.positions.clone());
+        // Project-file reordering and floating point evaluation may move a
+        // point by one unit at this precision.
+        expected.sort_unstable();
+        assert!(got.iter().zip(&expected).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1)));
     }
 
     /// The newest recipe, replayed on `base`, matches the piece now.
