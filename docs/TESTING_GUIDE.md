@@ -20,7 +20,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-4.1.3-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-4.1.4-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -40,6 +40,11 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 8. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (glTF/GLB, OBJ, STL or PLY). Try a `.glb` in another 3D tool or game engine: each piece should arrive as its own object. In the **Pieces** menu, try **Make LOD chain** and **Split into loose parts** (on a model made of separate parts, e.g. an imported OBJ).
 9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
 10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+
+## 4.1.4 smoke test
+
+1. **OxySpheres quad hands and feet.** Attach five digits to the wrist or ankle of an armature, with room between adjacent links. Choose **Quad base mesh**, make the mesh, and inspect the loops around the joint. Try the same with X mirroring.
+2. **Import repair.** Import a mesh with duplicate faces and a separate piece with an open boundary. Open **Inspect import** from the status bar, frame the affected pieces, and run **Repair faces** on the first piece. Use **Close holes** on the second piece and check that Undo brings back its earlier report. Open sheets can have intentional boundaries.
 
 ## 4.1.3 smoke test
 
