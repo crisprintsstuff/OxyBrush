@@ -17,6 +17,7 @@ pub mod deform;
 pub mod dyntopo;
 pub mod instances;
 pub mod knife;
+pub mod morph;
 pub mod multires;
 pub mod scale_plates;
 pub mod surface_noise;

@@ -88,8 +88,8 @@ const SculptVariants = (() => {
 
   function toObj(vertices, faces) {
     return [
-      "# OxyBrush Sculpt Variants",
-      "o Sculpt_Variants_Mix",
+      "# OxyBrush OxyMorph",
+      "o OxyMorph_Mix",
       ...vertices.map((vertex) => "v " + vertex.map((value) => value.toFixed(7)).join(" ")),
       "s 1",
       ...faces.map((face) => "f " + face.map((index) => index + 1).join(" ")),

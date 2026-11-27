@@ -1069,6 +1069,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
     crate::deform_ui::deform_window(ui.ctx(), ed);
     crate::surface_noise_ui::surface_noise_window(ui.ctx(), ed);
+    crate::oxymorph::window(ui.ctx(), ed);
     crate::scale_cover_ui::scale_cover_window(ui.ctx(), ed);
     crate::color_filter_ui::color_filter_window(ui.ctx(), ed);
     crate::living_ui::window(ui.ctx(), ed);
@@ -4816,6 +4817,9 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
+    if ed.oxymorph_preview_pair().is_some() {
+        return "OxyMorph preview · drag to orbit · wheel to zoom".into();
+    }
     if let Some(pe) = ed.poly_edit.as_ref() {
         return format!(
             "Poly Edit: faces {} · edges {} · points {} · drag empty space: orbit · Esc: done",
@@ -5275,6 +5279,9 @@ fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if tips::button(ui, "Surface Noise…", Cmd::SurfaceNoiseWindow).clicked() {
         ed.surface_noise_open();
+    }
+    if tips::button(ui, "OxyMorph…", Cmd::OxyMorph).clicked() {
+        ed.oxymorph_open();
     }
     if tips::button(ui, "Scale cover…", Cmd::ScaleCoverWindow).clicked() {
         ed.scale_cover_open();

@@ -1,6 +1,6 @@
-# RFC 0056 — Sculpt Variants
+# RFC 0056 — OxyMorph
 
-- **Status:** Proposed. Standalone interaction prototype ready for artist review.
+- **Status:** First native slice in development. The browser prototype demonstrates the proposed painted mix and linked panes.
 - **Scope:** Try two sculpt directions on one piece and paint a third version from them.
 
 ## 1. Concept
@@ -55,7 +55,29 @@ OxyBrush’s split view and editable stroke groups provide native building
 blocks for the feature.
 [Split view](0054-split-view.md) · [Living strokes](0017-living-strokes.md)
 
-## 3. First native scope
+## 3. Native implementation
+
+### First slice
+
+- Open **Tools > OxyMorph** on the displayed mesh of a sculptable piece to
+  use it as A. **Fork B** makes an ordinary editable piece with matching
+  vertex identity and selects it. Select A or B to keep sculpting in the
+  same viewport.
+- Turn on **Preview mix** and adjust the global mix. The preview temporarily
+  replaces both input surfaces in the viewport without editing either
+  piece or changing their visibility settings. Drag to orbit the preview.
+- **Create piece from mix** adds a regular sculptable result and records one
+  Undo step. Closing the panel discards the preview. The editable fork is
+  a normal piece with its own Undo step.
+- Blend only forks that share the original topology version. A topology
+  change or subdivision level switch invalidates the blend. Undoing the
+  change can recover correspondence. The initial limit is 200,000 triangles
+  at the displayed level. Mix positions and keep A's material and mesh
+  attributes. Saved projects retain ordinary pieces. The in-progress
+  session and fork correspondence are scoped to the current project
+  session.
+
+### Follow-up scope
 
 - Start from one active piece at its displayed level and fork matched
   positions into A and B. Use topology-preserving sculpt brushes. Keep
@@ -88,13 +110,12 @@ Pick on displayed geometry, then apply a surface-connected falloff over
 the corresponding shared mesh. The prototype uses distance on its
 original sphere. Native tests need to exercise thin and folded surfaces.
 
-Validate the topology version and subdivision level before applying jobs
-or creating the result. Freeze topology-changing tools within the initial
-session so documents and arrays remain consistent. Use chunk-local
-position deltas and dirty ranges for the native implementation. Keep
-geometry evaluation GPU-free and measure how much copying and redraw the
-session adds. Strongly opposing edits can self-intersect during
-interpolation. Test that explicitly before defining any automatic guard.
+Validate the shared topology version before showing the blend or creating
+the result. A global slider change can move every point. Use chunk-local
+position deltas and dirty ranges for future painted changes. Keep geometry
+evaluation GPU-free and measure how much copying and redraw the session
+adds. Strongly opposing edits can self-intersect during interpolation.
+Test that explicitly before defining any automatic guard.
 
 ## 5. Review and acceptance
 
