@@ -603,17 +603,45 @@ impl Multires {
     /// Subdivided positions of level `k − 1`, in level `k` order, by the
     /// rules level `k` was made with (smooth or not).
     fn smooth_from(&self, k: usize) -> Vec<Vec3> {
-        let prev = &self.levels[k - 1];
+        self.refine_positions(k, &self.levels[k - 1].positions)
+    }
+
+    fn refine_positions(&self, k: usize, positions: &[Vec3]) -> Vec<Vec3> {
         let smooth = self.levels[k].smooth;
         match self.levels[k].refinement.as_ref().expect("levels above 0 have a refinement") {
-            Refinement::Loop(r) if smooth => loop_positions(&prev.positions, r),
-            Refinement::Loop(r) => {
-                let p = &prev.positions;
-                p.iter().copied().chain(r.edges.iter().map(|e| (p[e.a as usize] + p[e.b as usize]) * 0.5)).collect()
+            Refinement::Loop(r) if smooth => loop_positions(positions, r),
+            Refinement::Loop(r) => positions
+                .iter()
+                .copied()
+                .chain(r.edges.iter().map(|e| (positions[e.a as usize] + positions[e.b as usize]) * 0.5))
+                .collect(),
+            Refinement::Cc(r) if smooth => {
+                cc_positions(positions, self.levels[k - 1].polys.as_ref().expect("quad level"), r)
             }
-            Refinement::Cc(r) if smooth => cc_positions(&prev.positions, prev.polys.as_ref().expect("quad level"), r),
-            Refinement::Cc(r) => linear_cc_positions(&prev.positions, prev.polys.as_ref().expect("quad level"), r),
+            Refinement::Cc(r) => {
+                linear_cc_positions(positions, self.levels[k - 1].polys.as_ref().expect("quad level"), r)
+            }
         }
+    }
+
+    /// Carry additive position changes between levels in subdivision order.
+    /// Moving up uses the same rules as an edit on the coarse mesh. Moving
+    /// down keeps the inherited vertex prefix, as in `sync_from`. Keep the
+    /// original deltas when heading down, since fine-only changes are lost
+    /// in the coarse projection.
+    pub fn transfer_displacements(&self, from: usize, to: usize, mut deltas: Vec<Vec3>) -> Option<Vec<Vec3>> {
+        let source = self.levels.get(from)?;
+        let target = self.levels.get(to)?;
+        if deltas.len() != source.positions.len() {
+            return None;
+        }
+        if to < from {
+            deltas.truncate(target.positions.len());
+        }
+        for level in from + 1..=to {
+            deltas = self.refine_positions(level, &deltas);
+        }
+        Some(deltas)
     }
 
     /// Whether each level was made with smoothing (level 0: true).
@@ -1893,6 +1921,42 @@ mod tests {
             out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
         }
         (out, edges)
+    }
+
+    #[test]
+    fn transferred_displacements_match_geometry_edits_at_other_levels() {
+        for scheme in [Scheme::Loop, Scheme::CatmullClark] {
+            for smooth in [false, true] {
+                let mesh = primitives::cube(1, 2.0);
+                let mut stack = Multires::new_with(&mesh, scheme, None);
+                let prepared = stack.prepare(&mesh);
+                let data = stack.add_level_prepared_with(prepared, smooth);
+                let middle = rebuild(&mut stack, data);
+                let prepared = stack.prepare(&middle);
+                let data = stack.add_level_prepared_with(prepared, smooth);
+                let fine = rebuild(&mut stack, data);
+                let data = stack.set_level(&fine, 1);
+                let mut edited = rebuild(&mut stack, data);
+                let order = stack.level_indices(&edited);
+                let mut deltas = vec![Vec3::ZERO; edited.vertex_count()];
+                for (i, p) in edited.positions.iter_mut().enumerate() {
+                    let delta = Vec3::new(i as f32 * 0.001, 0.25, -0.1);
+                    deltas[order[i] as usize] = delta;
+                    *p += delta;
+                }
+
+                for target in [0, 1, 2] {
+                    let expected = stack.transfer_displacements(1, target, deltas.clone()).unwrap();
+                    let before = &stack.levels[target].positions;
+                    let after = stack.clone().set_level(&edited, target).positions;
+                    for ((&after, &before), expected) in after.iter().zip(before).zip(expected) {
+                        assert!((after - before - expected).length() < 1e-5, "{scheme:?}, {smooth}, {target}");
+                    }
+                }
+                assert!(stack.transfer_displacements(1, 9, deltas).is_none());
+                assert!(stack.transfer_displacements(1, 0, Vec::new()).is_none());
+            }
+        }
     }
 
     #[test]
