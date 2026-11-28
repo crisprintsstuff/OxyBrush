@@ -307,4 +307,26 @@ fn xray_and_glass_respect_opaque_depth() {
         let overlapping = render(&settings, &items, Some(board()));
         assert_eq!(center(&overlapping), center(&lens));
     }
+
+    // Put a frosted lens across the split. Even taps beyond the pane edge
+    // must stay blue or neutral, and drawing the second pane preserves the first.
+    let left = RenderTarget { viewport: [4.0, 4.0, 28.0, 56.0], ..target };
+    let right = RenderTarget { viewport: [32.0, 4.0, 28.0, 56.0], clear: false, ..target };
+    let first_camera = Camera { target: -Vec3::X * 0.67, ..orthographic };
+    let second_camera = Camera { target: Vec3::X * 0.67, ..orthographic };
+    let pane_settings = ViewSettings { background: [0.8, 0.0, 0.0], ..settings };
+    let glass = DrawItem { glass: Some(exit_frost), ..item };
+    next_view.set(Some((left, first_camera)));
+    let left_pixels = render(&pane_settings, &[glass], Some(reference(false)));
+    let blue = ReferencePlane { pixels: [0, 0, 255, 255].into(), ..reference(false) };
+    next_view.set(Some((right, second_camera)));
+    let split = render(&pane_settings, &[glass], Some(blue));
+    for y in 4..60 {
+        for x in 4..32 {
+            assert_eq!(sample(&split, x, y), sample(&left_pixels, x, y));
+        }
+    }
+    let divider_pixels = || (32..38).map(|x| sample(&split, x, 32));
+    assert!(divider_pixels().any(|pixel| pixel[0] > 0));
+    assert!(divider_pixels().all(|pixel| pixel[0] == pixel[1] && pixel[2] > pixel[0]));
 }
