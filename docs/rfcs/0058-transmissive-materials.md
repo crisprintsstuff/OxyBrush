@@ -5,6 +5,9 @@
 
 ## Workflow
 
+See the [Glass materials guide](../guides/viewport-glass.md) for the pane and
+sphere comparison.
+
 Open **Materials**, choose the active piece as the target, then pick **Clear
 Glass** or **Frosted Glass**. Adjust tint, roughness, and refraction while watching
 the model, then apply the settings in one Undo step. For colored glass, raise
@@ -59,6 +62,9 @@ the scene material.
 - A material assignment and Apply each undo in one step. Reopening restores
   the piece's glass settings.
 - Opaque-only scenes keep the existing viewport path.
+
+The Linux headless render job runs the glass and X-ray regression on
+Mesa's software Vulkan adapter.
 
 ## References
 

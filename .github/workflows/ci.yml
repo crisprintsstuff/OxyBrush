@@ -46,6 +46,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.99.1
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y xvfb mesa-vulkan-drivers libxkbcommon-x11-0
+      - name: Test glass and X-ray on Vulkan software rendering
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          export VK_DRIVER_FILES="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)"
+          test -n "$VK_DRIVER_FILES"
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          cargo test -p oxy-render --test xray -- --ignored
       - run: cargo build -p oxy-app
       - run: xvfb-run -a -s "-screen 0 1600x1000x24" env XDG_RUNTIME_DIR=/tmp ./target/debug/oxybrush --demo --screenshot screenshot.png
       - uses: actions/upload-artifact@v4
