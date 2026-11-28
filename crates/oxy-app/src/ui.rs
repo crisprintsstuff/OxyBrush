@@ -890,7 +890,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
                         .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
                 });
-                tips::menu(ui, "Material", "The viewport material (matcap), including ones you loaded", |ui| {
+                tips::menu(ui, "Material", "Matcaps and transmissive viewport materials", |ui| {
                     material_target(ui, ed);
                     lit_material_controls(ui, ed);
                     for m in MatcapPreset::ALL {
@@ -3986,6 +3986,62 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
     {
         ed.set_piece_material(None);
     }
+    if ed.material_for_piece {
+        glass_controls(ui, ed);
+    }
+}
+
+fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
+    use oxy_render::GlassMaterial;
+
+    let Some(piece) = ed.scene.try_active() else { return };
+    let piece_id = piece.id;
+    let stored = piece.material.as_deref().and_then(GlassMaterial::from_key);
+    ui.horizontal(|ui| {
+        for preset in [GlassMaterial::CLEAR, GlassMaterial::FROSTED] {
+            if ui
+                .selectable_label(stored.is_some_and(|glass| glass.label() == preset.label()), preset.label())
+                .clicked()
+            {
+                ed.set_piece_material(Some(preset.key()));
+            }
+        }
+    });
+    let Some(stored) = stored else { return };
+    let id = ui.scope_id().with(("glass_draft", ed.id, piece_id));
+    let mut draft = ui
+        .data_mut(|d| d.get_temp::<(GlassMaterial, GlassMaterial)>(id))
+        .filter(|(original, _)| *original == stored)
+        .map_or(stored, |(_, current)| current);
+    ui.add(widgets::Bar(egui::Slider::new(&mut draft.roughness, 0.0..=1.0).text("Roughness")));
+    ui.add(widgets::Bar(egui::Slider::new(&mut draft.ior, 1.0..=2.5).text("Refraction (IOR)")))
+        .on_hover_text("Controls how far the glass bends what you see behind it.");
+    ui.collapsing("Tint", |ui| {
+        let [r, g, b] = draft.tint;
+        let mut hsv = egui::ecolor::Hsva::from(Color32::from_rgb(r, g, b));
+        if egui::widgets::color_picker::color_picker_hsva_2d(ui, &mut hsv, egui::widgets::color_picker::Alpha::Opaque) {
+            let [r, g, b, _] = Color32::from(hsv).to_array();
+            draft.tint = [r, g, b];
+        }
+    });
+    if let Some(seed) = &mut draft.frost_seed
+        && ui.button("Reseed frost").on_hover_text("Generate a different procedural frost pattern.").clicked()
+    {
+        *seed = seed.wrapping_add(1);
+    }
+    if draft != stored {
+        ui.horizontal(|ui| {
+            if ui.button("Apply glass settings").clicked() {
+                ed.set_piece_material(Some(draft.key()));
+            } else if ui.button("Reset changes").clicked() {
+                draft = stored;
+            } else {
+                ed.preview_piece_material = Some(draft.key());
+            }
+        });
+    }
+    ui.data_mut(|d| d.insert_temp(id, (stored, draft)));
+    ui.separator();
 }
 
 /// Preview of a custom matcap as a round image (cached per name).

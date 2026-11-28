@@ -913,6 +913,19 @@ impl App {
             })
             .collect();
         let slot_of = |id: u64| slot_map.get(&id).copied().unwrap_or(0);
+        let glass: std::collections::HashMap<_, _> = ed
+            .scene
+            .pieces
+            .iter()
+            .filter_map(|p| {
+                let key = if p.id == active {
+                    ed.preview_piece_material.as_deref().or(p.material.as_deref())
+                } else {
+                    p.material.as_deref()
+                };
+                Some((p.id, oxy_render::GlassMaterial::from_key(key?)?))
+            })
+            .collect();
         let hard_edge_angle = ed.view.hard_edge_angle;
         let mut items = Vec::new();
         let mut compare_items = [None; 3];
@@ -939,6 +952,7 @@ impl App {
                     instances: None,
                     wireframe: false,
                     color_map: false,
+                    glass: glass.get(&p.id).copied(),
                 });
             } else if p.visible
                 && Some(p.id) != curve_piece
@@ -955,6 +969,7 @@ impl App {
                     instances: None,
                     wireframe: Some(p.id) == poly_wire,
                     color_map: false,
+                    glass: glass.get(&p.id).copied(),
                 });
             }
         }
@@ -983,6 +998,7 @@ impl App {
                 instances: Some(d.key),
                 wireframe: false,
                 color_map: false,
+                glass: glass.get(&d.source).copied(),
             });
         }
         if compare.is_none() {
@@ -1006,6 +1022,7 @@ impl App {
                 instances: None,
                 wireframe: false,
                 color_map: morph_map,
+                glass: glass.get(&a).copied(),
             });
         }
         if let Some(preview) = ed.preview_mesh_mut() {
@@ -1023,6 +1040,7 @@ impl App {
                 instances: None,
                 wireframe: force_preview_wire,
                 color_map: single_mix && morph_map,
+                glass: curve_piece.and_then(|id| glass.get(&id).copied()),
             };
             if let Some([a, b]) = compare {
                 if curve_piece == Some(a) {

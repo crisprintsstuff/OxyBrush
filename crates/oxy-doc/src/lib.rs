@@ -446,7 +446,7 @@ pub struct PieceData {
     /// The `STRK` section: editable strokes (Living strokes), with point
     /// numbers in `mesh`'s order. Filled in by the app when it saves.
     pub strokes: Option<SavedStrokes>,
-    /// The `MATL` section: the piece's own matcap (see [`Piece::material`]).
+    /// The `MATL` section: the piece's viewport material key.
     pub material: Option<String>,
     /// The `INST` section: surface instances. Filled in by
     /// [`Scene::to_data`], which knows the pieces' places in the list.

@@ -81,6 +81,10 @@ enum Change {
         piece: u64,
         visible: bool,
     },
+    Material {
+        piece: u64,
+        key: Option<String>,
+    },
     /// A piece was moved from one position to another in the pieces list.
     Reorder {
         from: usize,
@@ -118,6 +122,8 @@ pub enum Step {
     Instancers { piece: u64, previous: Vec<oxy_doc::Instancer> },
     /// The piece was shown or hidden; this is whether it was visible.
     Visible { piece: u64, previous: bool },
+    /// The piece's material key before the change.
+    Material { piece: u64, previous: Option<String> },
     /// The piece's parent was changed; this is its previous parent id.
     Parent { piece: u64, previous: Option<u64> },
     /// The piece's link (linked copy) was changed; this is the old one.
@@ -138,6 +144,7 @@ impl From<Step> for Change {
             }
             Step::Instancers { piece, previous } => Change::Instancers { piece, list: previous },
             Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
+            Step::Material { piece, previous } => Change::Material { piece, key: previous },
             Step::Reordered { from, to } => Change::Reorder { from: to, to: from },
             Step::Parent { piece, previous } => Change::Parent { piece, parent: previous },
             Step::Link { piece, previous } => Change::Link { piece, link: previous },
@@ -208,6 +215,7 @@ impl Change {
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
+            | Change::Material { piece, .. }
             | Change::Parent { piece, .. }
             | Change::Link { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
@@ -231,6 +239,7 @@ impl Change {
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
+            | Change::Material { piece, .. }
             | Change::Parent { piece, .. }
             | Change::Link { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
@@ -255,6 +264,7 @@ impl Change {
             Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
             Change::Visible { .. } | Change::Reorder { .. } | Change::Parent { .. } => 16,
+            Change::Material { key, .. } => 32 + key.as_ref().map_or(0, String::capacity),
             Change::Link { .. } => 80,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Cage { mesh, cage, .. } => {
@@ -324,6 +334,11 @@ impl Change {
             Change::Visible { piece, visible } => {
                 let p = scene.get_mut(*piece)?;
                 std::mem::swap(&mut p.visible, visible);
+                Some(*piece)
+            }
+            Change::Material { piece, key } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.material, key);
                 Some(*piece)
             }
             Change::Parent { piece, parent } => {

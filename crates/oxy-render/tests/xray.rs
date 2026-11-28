@@ -3,7 +3,7 @@ use oxy_render::{Camera, DrawItem, ReferencePlane, RenderTarget, ViewSettings, V
 
 #[test]
 #[ignore = "requires a wgpu adapter"]
-fn xray_composites_once_and_preserves_opaque_depth() {
+fn xray_and_glass_respect_opaque_depth() {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -50,6 +50,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         instances: None,
         wireframe: false,
         color_map: false,
+        glass: None,
     };
     let rear = DrawItem { id: 2, active: false, ..item };
     let settings = ViewSettings { ambient_occlusion: 0.0, cavity: 0.0, ..Default::default() };
@@ -175,4 +176,44 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     let second = render(&flat, &[item], None);
     assert_eq!(sample(&second, 25, 32), sample(&seeded, 25, 32));
     assert_eq!(sample(&second, 32, 32), sample(&flat_bg, 32, 32));
+
+    // Refraction must sample the available background, respect opaque
+    // depth, and leave the viewport outside the glass unchanged.
+    use oxy_render::GlassMaterial;
+    let board = || ReferencePlane {
+        size: [16, 16],
+        pixels: (0..256)
+            .flat_map(|i| {
+                let c = if (i % 16 + i / 16) % 2 == 0 { 28 } else { 230 };
+                [c, c, c, 255]
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..reference(false)
+    };
+    let plain = render(&settings, &[], Some(board()));
+    let clear = render(&settings, &[DrawItem { glass: Some(GlassMaterial::CLEAR), ..item }], Some(board()));
+    let frosted = render(&settings, &[DrawItem { glass: Some(GlassMaterial::FROSTED), ..item }], Some(board()));
+    let neutral = render(
+        &settings,
+        &[DrawItem { glass: Some(GlassMaterial { ior: 1.0, roughness: 0.0, ..GlassMaterial::CLEAR }), ..item }],
+        Some(board()),
+    );
+    let gradient = |frame: &[u8]| {
+        (23..41)
+            .flat_map(|y| (23..40).map(move |x| u32::from(sample(frame, x, y)[0].abs_diff(sample(frame, x + 1, y)[0]))))
+            .sum::<u32>()
+    };
+    assert_eq!(plain, neutral);
+    assert_ne!(clear, plain);
+    assert!(gradient(&frosted) < gradient(&clear));
+    assert_eq!(sample(&plain, 5, 5), sample(&clear, 5, 5));
+    let occluded = render(&settings, &[item, DrawItem { glass: Some(GlassMaterial::CLEAR), ..rear }], Some(board()));
+    assert_eq!(center(&solid), center(&occluded));
+    let shaded_glass = render(
+        &ViewSettings { ambient_occlusion: 0.7, cavity: 0.6, ..settings },
+        &[DrawItem { glass: Some(GlassMaterial::CLEAR), ..item }],
+        Some(board()),
+    );
+    assert_eq!(clear, shaded_glass, "without opaque meshes the background has no AO");
 }

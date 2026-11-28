@@ -6,7 +6,7 @@
 //!
 //!     cargo run --release -p oxy-render --example shading_timing
 
-use oxy_render::{Camera, DrawItem, RenderTarget, ViewSettings, ViewportRenderer};
+use oxy_render::{Camera, DrawItem, GlassMaterial, RenderTarget, ViewSettings, ViewportRenderer};
 use std::time::Instant;
 
 fn main() {
@@ -47,7 +47,7 @@ fn main() {
     renderer.sync(&device, &queue, 1, &mut mesh, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, false);
     let mut camera = Camera::default();
     camera.frame(mesh.bounds());
-    let items = [DrawItem {
+    let item = DrawItem {
         id: 1,
         active: true,
         preview: false,
@@ -55,7 +55,8 @@ fn main() {
         instances: None,
         wireframe: false,
         color_map: false,
-    }];
+        glass: None,
+    };
     // The viewport between the default panels.
     let rt = RenderTarget { view: &view, size: (w, h), viewport: [206.0, 70.0, 844.0, 800.0], clear: true };
     println!("{} triangles, viewport {}x{}", mesh.triangle_count(), 844, 800);
@@ -78,8 +79,11 @@ fn main() {
     let bounds = mesh.bounds();
     let scene_bounds = Some((bounds.min.to_array(), bounds.max.to_array()));
     let xray_only = std::env::args().any(|arg| arg == "--xray");
+    let glass_only = std::env::args().any(|arg| arg == "--glass");
     for (label, ao, cavity, lighting, xray) in [
         ("plain", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
+        ("clear glass", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
+        ("frosted glass", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
         ("plain with X-ray", 0.0, 0.0, oxy_render::lighting::Lighting::default(), true),
         ("cavity only", 0.0, 0.6, oxy_render::lighting::Lighting::default(), false),
         ("ambient occlusion + cavity", 0.7, 0.6, oxy_render::lighting::Lighting::default(), false),
@@ -94,11 +98,17 @@ fn main() {
         ),
         ("area light, soft shadows (instead of the key) + AO + cavity", 0.7, 0.6, area(), false),
     ] {
-        if xray_only && label != "plain" && !xray {
+        let glass = match label {
+            "clear glass" => Some(GlassMaterial::CLEAR),
+            "frosted glass" => Some(GlassMaterial::FROSTED),
+            _ => None,
+        };
+        if label != "plain" && (glass_only != glass.is_some() || xray_only && !xray) {
             continue;
         }
         let settings =
             ViewSettings { ambient_occlusion: ao, cavity, lighting, scene_bounds, xray, ..Default::default() };
+        let items = [DrawItem { glass, ..item }];
         let mut run = |n: usize| {
             let t = Instant::now();
             for _ in 0..n {
