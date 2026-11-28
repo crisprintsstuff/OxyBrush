@@ -1338,6 +1338,7 @@ pub struct Editor {
     pub request_load_alpha: bool,
     /// Ask the app for a file to export the selected alpha to.
     pub request_export_alpha: bool,
+    pub(crate) screenshot_options: Option<crate::snapshot::Options>,
     pub view: ViewSettings,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
@@ -1777,6 +1778,7 @@ impl Default for Editor {
             select_curve: None,
             request_load_alpha: false,
             request_export_alpha: false,
+            screenshot_options: None,
             view: ViewSettings::default(),
             remember_brushes: false,
             settings_per_brush: true,
@@ -6920,7 +6922,10 @@ impl Editor {
         }
     }
 
-    /// Export visible pieces combined into one mesh file.
+    pub(crate) fn open_screenshot_export(&mut self) {
+        self.screenshot_options.get_or_insert_with(Default::default);
+    }
+
     /// Export the visible pieces (hidden faces left out). glTF/GLB and OBJ
     /// keep pieces as separate objects; STL and PLY merge them.
     ///
@@ -11480,6 +11485,19 @@ mod tests {
         let bounds = e.scene.bounds();
         e.camera.frame(bounds);
         e
+    }
+
+    #[test]
+    fn opening_screenshot_export_keeps_the_scene_and_view() {
+        use crate::snapshot::{Area, Format, Options};
+        let mut e = editor();
+        let before = e.camera;
+        e.open_screenshot_export();
+        assert_eq!(e.screenshot_options, Some(Options { area: Area::Viewport, format: Format::Png }));
+        assert!(!e.is_modified());
+        assert!(!e.can_undo());
+        assert_eq!(e.camera.eye(), before.eye());
+        assert_eq!(e.camera.target, before.target);
     }
 
     fn center(e: &mut Editor) {
