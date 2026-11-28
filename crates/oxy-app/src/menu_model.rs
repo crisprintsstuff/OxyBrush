@@ -25,6 +25,7 @@ pub enum MenuId {
     Recent(usize),
     ClearRecent,
     ExportFormat(ExportFormat),
+    ExportScreenshot,
     Gltf(oxy_io::GltfCompression),
     /// Send back to the linked app; `true` also closes the document.
     SendBackLink(bool),
@@ -202,7 +203,11 @@ fn file_menu(ed: &Editor) -> Vec<Node> {
             .map(|&c| check(MenuId::Gltf(c), c.label(), ed.gltf_compression == c))
             .collect(),
     ));
-    v.extend([Node::Separator, cmd(Cmd::RunScript, "Run Python script…")]);
+    v.extend([
+        item(MenuId::ExportScreenshot, "Export screenshot…"),
+        Node::Separator,
+        cmd(Cmd::RunScript, "Run Python script…"),
+    ]);
     // Quit is in the application menu on macOS.
     v
 }
@@ -615,6 +620,7 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
         }
         MenuId::ClearRecent => ed.recent_files.clear(),
         MenuId::ExportFormat(f) => ed.export_format = f,
+        MenuId::ExportScreenshot => ed.open_screenshot_export(),
         MenuId::Gltf(c) => ed.gltf_compression = c,
         MenuId::SendBackLink(close) => ed.send_back_link(close),
         MenuId::UndoScene => ed.undo_scene(),

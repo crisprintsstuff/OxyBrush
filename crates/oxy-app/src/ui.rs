@@ -22,6 +22,7 @@ pub enum UiAction {
     Save,
     SaveAs,
     Export,
+    ExportScreenshot(crate::snapshot::Options),
     /// Save, then perform the pending action (from the unsaved-changes prompt).
     SaveThenContinue,
     /// Load a grayscale image as a brush alpha.
@@ -747,6 +748,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 })
                 .response
                 .on_hover_text("How .glb and .gltf exports are compressed. Also in Preferences > General.");
+                if ui.button("Export screenshot…").clicked() {
+                    ed.open_screenshot_export();
+                }
                 ui.separator();
                 if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
                     ed.request_run_script = true;
@@ -1142,7 +1146,44 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_poly_area_outline(ui, ed, canvas);
     remesh_density_overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
+    if let Some(options) = screenshot_dialog(ui.ctx(), ed) {
+        action = Some(UiAction::ExportScreenshot(options));
+    }
     (action, canvas)
+}
+
+fn screenshot_dialog(ctx: &egui::Context, ed: &mut Editor) -> Option<crate::snapshot::Options> {
+    use crate::snapshot::{Area, Format};
+    let options = ed.screenshot_options.as_mut()?;
+    let mut save = false;
+    let mut cancel = false;
+    let modal = egui::Modal::new(egui::Id::unique("export_screenshot")).show(ctx, |ui| {
+        ui.heading("Export screenshot");
+        ui.horizontal(|ui| {
+            ui.label("Capture");
+            ui.selectable_value(&mut options.area, Area::Viewport, "Viewport");
+            ui.selectable_value(&mut options.area, Area::Window, "Full window");
+        });
+        ui.horizontal(|ui| {
+            ui.label("Format");
+            for format in [Format::Png, Format::Jpeg, Format::WebP] {
+                ui.selectable_value(&mut options.format, format, format.label());
+            }
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            save = ui.button("Save image…").clicked();
+            cancel = ui.button("Cancel").clicked();
+        });
+    });
+    if save {
+        ed.screenshot_options.take()
+    } else {
+        if cancel || modal.should_close() {
+            ed.screenshot_options = None;
+        }
+        None
+    }
 }
 
 /// Accent rim on the active pane and a drag strip on the divider.

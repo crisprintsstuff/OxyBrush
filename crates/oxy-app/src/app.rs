@@ -106,6 +106,8 @@ pub struct App {
     agent: Option<crate::agent::Inbox>,
     /// Screenshot tool waiting for this frame's viewport.
     shot_reply: Option<std::sync::mpsc::Sender<oxy_mcp::ToolResult>>,
+    screenshot_request: Option<crate::snapshot::Request>,
+    screenshot_result: Option<std::sync::mpsc::Receiver<String>>,
     /// Running Python plugin process.
     plugin_process: Option<crate::plugins::PluginProcess>,
     /// The running Python plugin's own MCP listener (not the agent's).
@@ -140,6 +142,7 @@ enum DialogReply {
     ImportKeymap(Option<PathBuf>),
     ExportKeymap(Option<PathBuf>),
     Export(Option<PathBuf>),
+    ExportScreenshot { options: crate::snapshot::Options, path: Option<PathBuf> },
     RunScript(Option<PathBuf>),
     InstallAddon(Option<PathBuf>),
 }
@@ -296,6 +299,8 @@ impl App {
             bridge_inbox: None,
             agent: None,
             shot_reply: None,
+            screenshot_request: None,
+            screenshot_result: None,
             plugin_process: None,
             plugin_inbox: None,
             egui_repaint_at: None,
@@ -1152,29 +1157,28 @@ impl App {
                 draw_items,
             );
         }
-        // The agent's screenshot is the viewport without the panels, so copy
-        // before egui draws. Reading the pixels back submits this encoder;
-        // the UI is recorded into a fresh one afterwards.
+        use crate::snapshot::{self, Area, Format};
+        let export = self.screenshot_request.take();
+        let export_area = export.as_ref().map(|request| request.options.area);
+        let mut export_pixels = None;
+        if export_area == Some(Area::Viewport) {
+            let crop = snapshot::viewport_crop(ed.canvas_full);
+            export_pixels = snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture, Some(crop));
+        }
+        // The agent receives the sculpt canvas before egui draws.
         if self.shot_reply.is_some() {
-            let copied = crate::snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture);
+            let crop = snapshot::viewport_crop(ed.canvas_full);
+            let copied = snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture, Some(crop));
             match copied {
                 Some(pending) => {
                     g.queue.submit([encoder.finish()]);
-                    // Screenshot the full sculpt canvas (both panes when split).
-                    let canvas = ed.canvas_full;
-                    let crop = (
-                        canvas[0].round().max(0.0) as u32,
-                        canvas[1].round().max(0.0) as u32,
-                        canvas[2].round().max(1.0) as u32,
-                        canvas[3].round().max(1.0) as u32,
-                    );
-                    let png = crate::snapshot::png_bytes(&g.device, pending, Some(crop));
+                    let (width, height) = pending.dimensions();
+                    let png = pending.encode(&g.device, Format::Png);
                     if let Some(reply) = self.shot_reply.take() {
                         let result = match png {
                             Ok(bytes) => oxy_mcp::ToolResult::with_image(
                                 format!(
-                                    "viewport {}x{} pixels. Screen-space stroke points use these pixels, origin at the top-left of the viewport.",
-                                    crop.2, crop.3
+                                    "viewport {width}x{height} pixels. Screen-space stroke points use these pixels, origin at the top-left of the viewport."
                                 ),
                                 bytes,
                             ),
@@ -1214,10 +1218,13 @@ impl App {
 
         self.frames += 1;
         let want_shot = self.auto.screenshot.is_some() && self.frames >= 4;
-        let shot = want_shot.then(|| crate::snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture));
+        let shot = want_shot.then(|| snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture, None));
+        if export_area == Some(Area::Window) {
+            export_pixels = snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture, None);
+        }
         g.queue.submit(extra.into_iter().chain([encoder.finish()]));
         if let (Some(shot), Some(path)) = (shot.flatten(), &self.auto.screenshot) {
-            match crate::snapshot::save_png(&g.device, shot, path) {
+            match shot.save(&g.device, path, Format::Png) {
                 Ok(()) => log::info!("wrote screenshot {}", path.display()),
                 Err(e) => log::error!("screenshot failed: {e}"),
             }
@@ -1225,6 +1232,29 @@ impl App {
         } else if want_shot {
             log::error!("surface does not support COPY_SRC; cannot take screenshot");
             event_loop.exit();
+        }
+        if let Some(request) = export {
+            if let Some(pixels) = export_pixels {
+                let (width, height) = pixels.dimensions();
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.screenshot_result = Some(rx);
+                let device = g.device.clone();
+                let proxy = self.proxy.clone();
+                std::thread::spawn(move || {
+                    let path = &request.path;
+                    let status = match pixels.save(&device, path, request.options.format) {
+                        Ok(()) => format!("Saved screenshot ({width} × {height}) to {}", path.display()),
+                        Err(e) => format!("Could not save screenshot to {}: {e}", path.display()),
+                    };
+                    let _ = tx.send(status);
+                    if let Some(proxy) = proxy {
+                        let _ = proxy.send_event(());
+                    }
+                });
+            } else {
+                ed.status = "This graphics surface does not support screenshots".into();
+                g.window.request_redraw();
+            }
         }
         g.window.pre_present_notify();
         g.queue.present(frame);
@@ -1546,6 +1576,22 @@ impl App {
                 }
                 self.spawn_dialog(dialog.save_file(), DialogReply::Export);
             }
+            UiAction::ExportScreenshot(options) => {
+                if self.dialog_active || self.screenshot_request.is_some() || self.screenshot_result.is_some() {
+                    ed.status = "Wait for the current file operation to finish".into();
+                    return;
+                }
+                let name = ed.path.as_ref().and_then(|p| p.file_stem()).unwrap_or_else(|| "sculpt".as_ref());
+                let extensions = options.format.extensions();
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .set_title("Save screenshot")
+                    .add_filter(options.format.label(), extensions)
+                    .set_file_name(format!("{}.{}", name.to_string_lossy(), extensions[0]));
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.save_file(), move |path| DialogReply::ExportScreenshot { options, path });
+            }
             UiAction::RunScript => {
                 if self.dialog_active {
                     return;
@@ -1670,6 +1716,10 @@ impl App {
                     let p = self.editor.export_format.with_default_extension(&p);
                     self.editor.export(&p);
                 }
+                DialogReply::ExportScreenshot { options, path: Some(path) } => match options.format.export_path(path) {
+                    Ok(path) => self.screenshot_request = Some(crate::snapshot::Request { path, options }),
+                    Err(e) => self.editor.status = e,
+                },
                 DialogReply::RunScript(Some(p)) => {
                     self.run_python_script(&p);
                 }
@@ -1902,6 +1952,21 @@ impl ApplicationHandler for App {
         self.poll_agent();
         self.poll_plugin();
         self.poll_dialog();
+        if let Some(result) = &self.screenshot_result {
+            use std::sync::mpsc::TryRecvError;
+            let status = match result.try_recv() {
+                Ok(status) => Some(status),
+                Err(TryRecvError::Disconnected) => Some("Screenshot export ended before saving the image".into()),
+                Err(TryRecvError::Empty) => None,
+            };
+            if let Some(status) = status {
+                self.screenshot_result = None;
+                self.editor.status = status;
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+            }
+        }
         let accept_bridge = self.gfx.is_some()
             && !self.dialog_active
             && self.editor.pending.is_none()
@@ -1918,7 +1983,7 @@ impl ApplicationHandler for App {
                 g.window.request_redraw();
             }
         }
-        if self.shot_reply.is_some()
+        if (self.shot_reply.is_some() || self.screenshot_request.is_some())
             && let Some(g) = &self.gfx
         {
             g.window.request_redraw();
@@ -1932,6 +1997,8 @@ impl ApplicationHandler for App {
             Duration::from_millis(15)
         } else if self.editor.documents.iter().any(|d| d.job.is_some())
             || self.shot_reply.is_some()
+            || self.screenshot_request.is_some()
+            || self.screenshot_result.is_some()
             || self.editor.updater.busy()
             || self.plugin_process.is_some()
             || self.dialog_active
@@ -2016,6 +2083,7 @@ impl ApplicationHandler for App {
             && key.physical_key == PhysicalKey::Code(KeyCode::Tab)
             && !self.egui_ctx.text_edit_focused()
             && self.editor.keymap_capture.is_none()
+            && self.editor.screenshot_options.is_none()
         {
             if let Some(id) = self.egui_ctx.memory(|m| m.focused()) {
                 self.egui_ctx.memory_mut(|m| m.surrender_focus(id));
@@ -2320,7 +2388,9 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let capture_or_quick = self.editor.keymap_capture.is_some()
                     || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held));
-                if capture_or_quick || !self.egui_ctx.egui_wants_keyboard_input() {
+                if self.editor.screenshot_options.is_none()
+                    && (capture_or_quick || !self.egui_ctx.egui_wants_keyboard_input())
+                {
                     if let Some(a) = self.handle_key(event) {
                         self.run_action(a);
                     }
