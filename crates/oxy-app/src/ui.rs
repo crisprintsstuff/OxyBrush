@@ -3601,24 +3601,19 @@ fn floating_quick_bar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) 
     } else {
         (egui::Align2::CENTER_BOTTOM, room.center_bottom() - egui::vec2(0.0, 12.0))
     };
-    let max_width = (room.width() - 40.0).max(200.0);
-    let id = egui::Id::unique("quick_bar");
-    // Reflow within the new canvas when a dock tray changes its width.
-    let width_changed = ctx.data_mut(|data| {
-        let key = id.with("available_width");
-        let width = max_width.round() as u32;
-        let changed = data.get_temp::<u32>(key) != Some(width);
-        data.insert_temp(key, width);
-        changed
-    });
-    egui::Area::new(id).pivot(pivot).fixed_pos(pos).constrain_to(room).sizing_pass(width_changed).show(ctx, |ui| {
+    let max_width = (room.width() - 40.0).max(140.0);
+    let slider_width = if ed.layout == UiLayout::Touch { 180.0f32 } else { 140.0 };
+    // The numeric fields sit alongside each slider. Leave room for them
+    // when the dock trays make the viewport narrow.
+    let slider_width = slider_width.min((max_width * 0.24).max(38.0));
+    egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).constrain_to(room).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
             .corner_radius(widgets::rounding(10.0))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.set_max_width(max_width);
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().slider_width = if ed.layout == UiLayout::Touch { 180.0 } else { 140.0 };
+                    ui.spacing_mut().slider_width = slider_width;
                     quick_controls(ui, ed);
                 });
             })
