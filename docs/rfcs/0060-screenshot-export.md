@@ -1,6 +1,6 @@
 # RFC 0060 — Screenshot export
 
-- **Status** · Proposed
+- **Status** · Implemented in 4.2.1
 - **Scope** · Save the current sculpting view as an image from the desktop app.
 
 ## Workflow
