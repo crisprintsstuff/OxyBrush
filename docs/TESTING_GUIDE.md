@@ -20,7 +20,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-4.1.4-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-4.2.0-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -40,6 +40,12 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 8. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (glTF/GLB, OBJ, STL or PLY). Try a `.glb` in another 3D tool or game engine: each piece should arrive as its own object. In the **Pieces** menu, try **Make LOD chain** and **Split into loose parts** (on a model made of separate parts, e.g. an imported OBJ).
 9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
 10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+
+## 4.2.0 smoke test
+
+1. **OxyMorph (Beta).** Fork B from a piece and open **Compare A / Mix / B**. Sculpt in each outer pane and paint **Keep A** and **Keep B** in the center. Move the mix slider and check that pinned areas stay with their variant. Save with the panel open and reopen to check that the session resumes.
+2. **Viewport glass.** Apply Clear Glass to a closed piece in front of a reference image. Try a colored tint with **Absorption** and turn on **Exit refraction**. Try Frosted Glass, Undo, and save and reopen. In split view, orbit near the divider and check that the other pane stays unchanged. [Glass materials guide](guides/viewport-glass.md)
+3. **Topology and selection.** Generate a quad base mesh from an armature with a tight three-way fork. Try an angled Plane Clip with a closed shape. In Poly Edit, check area selection from the front with **Front only** both on and off.
 
 ## 4.1.4 smoke test
 

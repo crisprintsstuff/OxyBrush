@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.1.4](releases/v4.1.4.md).
+[4.2.0](releases/v4.2.0.md).
 The detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -109,6 +109,8 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
 ## Recently shipped (for context)
+
+- **4.2.0.** OxyMorph (Beta) with linked sculpt variants and painted blends, plus Clear Glass and Frosted Glass viewport materials. [Release notes](releases/v4.2.0.md)
 
 - **4.1.4.** Quad hands and feet, plus import inspection and undoable mesh repair. [Release notes](releases/v4.1.4.md)
 - **4.1.3:** OxySpheres branch rotation and connected quad junctions, Retopology Contour, repeatable lower subdivision level recovery, and sculpt and paint layers across levels. [Release notes](releases/v4.1.3.md)

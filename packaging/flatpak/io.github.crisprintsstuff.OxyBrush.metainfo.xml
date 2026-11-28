@@ -52,6 +52,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.2.0" date="2026-11-28" type="stable">
+      <description>
+        <p>Sculpt two versions of a piece in OxyMorph Beta, paint the blend, and save an unfinished mix.</p>
+        <p>Apply clear or frosted viewport glass with tint, absorption, and optional exit refraction.</p>
+        <p>Improves crowded OxySpheres joints, Plane Clip cutters, and Poly Edit area selection.</p>
+      </description>
+    </release>
     <release version="4.1.4" date="2026-11-27" type="stable">
       <description>
         <p>Build quad hands and feet with up to six links per OxySpheres joint.</p>
