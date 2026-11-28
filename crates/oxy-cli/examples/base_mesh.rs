@@ -44,7 +44,13 @@ fn main() {
     let mesh = cage.build_mesh().expect("faces");
     let mut piece = Piece::new(name.clone(), mesh);
     piece.cage = Some(cage);
-    let scene = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() };
+    let scene = SceneData {
+        pieces: vec![piece.to_data()],
+        active: 0,
+        alphas: Vec::new(),
+        references: Vec::new(),
+        oxymorph: None,
+    };
     oxy_doc::format::save(&scene, std::path::Path::new(out)).expect("save");
     let size = std::fs::metadata(out).map(|m| m.len()).unwrap_or(0);
     println!("{out}: {face} faces, {} groups, {size} bytes", {

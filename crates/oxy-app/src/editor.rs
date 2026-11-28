@@ -2038,7 +2038,12 @@ impl Editor {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.history.revision() != self.saved_revision || self.alphas_unsaved || self.pieces_unsaved
+        self.documents[self.active_document].is_dirty()
+    }
+
+    pub(crate) fn mark_morph_changed(&mut self) {
+        self.morph_unsaved = true;
+        self.morph_autosave_pending = true;
     }
 
     pub fn title(&self) -> String {
@@ -5700,6 +5705,8 @@ impl Editor {
         self.history.clear();
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
+        self.morph_unsaved = false;
+        self.morph_autosave_pending = false;
         self.alphas_unsaved = false;
         self.pieces_unsaved = false;
         self.path = path;
@@ -6141,6 +6148,7 @@ impl Editor {
         let doc = &self.documents[idx];
         let mut data = doc.scene.to_data();
         data.alphas = Self::doc_saved_alphas(doc);
+        data.oxymorph = doc.oxymorph.as_ref().and_then(|morph| morph.saved(doc));
         for (d, p) in data.pieces.iter_mut().zip(&doc.scene.pieces) {
             d.strokes = doc.living.saved(p);
             d.own_level = self.own_level(idx, p.id);
@@ -6239,8 +6247,10 @@ impl Editor {
     /// couldn't be read, leaving the document as it was.
     fn open_project_now(&mut self, path: &Path) -> bool {
         let mut alphas = Vec::new();
+        let mut morph = None;
         match format::load(path).map(|mut d| {
             alphas = std::mem::take(&mut d.alphas);
+            morph = d.oxymorph.take();
             Scene::from_data(d)
         }) {
             Ok(Some(scene)) => {
@@ -6249,10 +6259,14 @@ impl Editor {
                 // pixels saved with the project, which aren't in the list yet.
                 self.adopt_alphas(alphas);
                 self.replace_document(scene, Some(path.to_path_buf()));
+                let restored = self.oxymorph_reopen(morph);
                 self.link = Link::detect(path, &self.scene);
                 self.protect_path(path);
                 self.remember_recent(path);
                 self.status = format!("Opened {} ({n} piece{})", path.display(), if n == 1 { "" } else { "s" });
+                if !restored {
+                    self.status.push_str(". The saved OxyMorph mix did not match its source meshes");
+                }
                 true
             }
             Ok(None) => {
@@ -6771,6 +6785,9 @@ impl Editor {
 
     /// Save document at `doc_idx` to `path`.
     pub fn save_doc(&mut self, doc_idx: usize, path: &Path) -> bool {
+        if doc_idx == self.active_document && matches!(self.drag, Drag::OxyMorphPaint) {
+            self.pointer_up();
+        }
         let Some(doc) = self.documents.get(doc_idx) else { return false };
         if let Some(job) = doc.job.as_ref().filter(|j| j.holds_levels) {
             self.status = format!("Wait for \"{}\" to finish, then save", job.label);
@@ -6788,6 +6805,8 @@ impl Editor {
                     doc.saved_revision = doc.history.revision();
                     doc.alphas_unsaved = false;
                     doc.pieces_unsaved = false;
+                    doc.morph_unsaved = false;
+                    doc.morph_autosave_pending = false;
                     doc_id = doc.id;
                     link = doc.link.clone();
                 }
@@ -6842,6 +6861,8 @@ impl Editor {
             Ok(()) => {
                 if self.path.as_ref().is_some_and(|p| same_path(p, &target)) {
                     self.saved_revision = self.history.revision();
+                    self.morph_unsaved = false;
+                    self.morph_autosave_pending = false;
                 }
                 self.protect_path(&target);
                 self.status = format!("Sent to OxyCharacter ({})", target.display());
@@ -6978,13 +6999,13 @@ impl Editor {
     pub fn tick_autosave(&mut self) {
         let active_id = self.documents[self.active_document].id;
         let stroking = self.is_stroking();
-        let any_due = self.documents.iter().any(|d| d.history.revision() != d.autosaved_revision && d.is_dirty());
+        let any_due = self.documents.iter().any(Document::needs_autosave);
         if !self.autosaver.due(any_due) {
             return;
         }
         for i in 0..self.documents.len() {
             let doc = &self.documents[i];
-            let changed = doc.history.revision() != doc.autosaved_revision && doc.is_dirty();
+            let changed = doc.needs_autosave();
             let levels_out = doc.job.as_ref().is_some_and(|j| j.holds_levels);
             let busy_stroking = doc.id == active_id && stroking;
             if changed && !levels_out && !busy_stroking {
@@ -6992,6 +7013,7 @@ impl Editor {
                 let source_path = doc.path.clone();
                 let data = self.doc_scene_data(i);
                 self.documents[i].autosaved_revision = self.documents[i].history.revision();
+                self.documents[i].morph_autosave_pending = false;
                 self.autosaver.start_for(doc_id, data, source_path);
                 break;
             }
@@ -7007,7 +7029,7 @@ impl Editor {
         let stroking = self.is_stroking();
         for i in 0..self.documents.len() {
             let doc = &self.documents[i];
-            let changed = doc.history.revision() != doc.autosaved_revision && doc.is_dirty();
+            let changed = doc.needs_autosave();
             let levels_out = doc.job.as_ref().is_some_and(|j| j.holds_levels);
             let busy_stroking = doc.id == active_id && stroking;
             if changed && !levels_out && !busy_stroking {
@@ -7015,6 +7037,7 @@ impl Editor {
                 let source_path = doc.path.clone();
                 let data = self.doc_scene_data(i);
                 self.documents[i].autosaved_revision = self.documents[i].history.revision();
+                self.documents[i].morph_autosave_pending = false;
                 self.autosaver.start_for(doc_id, data, source_path);
                 break;
             }
@@ -7023,8 +7046,10 @@ impl Editor {
 
     pub fn recover(&mut self, r: &autosave::Recoverable) {
         let mut alphas = Vec::new();
+        let mut morph = None;
         match format::load(&r.path).map(|mut d| {
             alphas = std::mem::take(&mut d.alphas);
+            morph = d.oxymorph.take();
             Scene::from_data(d)
         }) {
             Ok(Some(scene)) => {
@@ -7043,12 +7068,16 @@ impl Editor {
                 // Same order as opening: alphas first, so recipes can find them.
                 self.adopt_alphas(alphas);
                 self.replace_document(scene, r.source_path.clone());
+                let restored = self.oxymorph_reopen(morph);
                 if let Some(orig) = &r.source_path {
                     self.protect_path(orig);
                 }
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
+                if !restored {
+                    self.status.push_str(" The saved OxyMorph mix did not match its source meshes.");
+                }
             }
             _ => self.status = format!("Could not recover {}", r.path.display()),
         }
@@ -11441,6 +11470,87 @@ mod tests {
         assert!(e.oxymorph.is_none());
         e.switch_tab(a);
         assert!(e.oxymorph.is_some());
+    }
+
+    #[test]
+    fn oxymorph_project_resumes_a_pinned_mix_after_meshes_are_reordered() {
+        use crate::oxymorph::ComparePane;
+        use oxy_mesh::{morph::MixBrush, multires::Multires};
+
+        let dir = std::env::temp_dir().join(format!("oxy-morph-round-trip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mix.oxb");
+        let mut e = editor();
+        e.canvas_full = [35.0, 55.0, 1000.0, 480.0];
+        let base = primitives::icosphere(3, 1.0);
+        let mut levels = Multires::new(&base);
+        let mesh = Mesh::from_data(levels.add_level(&base));
+        levels.bind(&mesh);
+        e.scene = Scene::new(Piece { multires: Some(levels), ..Piece::new("A", mesh) });
+        e.oxymorph_open();
+        e.oxymorph_fork();
+        // Rotation changes the spatial sort when the file loads. A also
+        // saves in subdivision order, which differs from its runtime order.
+        let shifted: Vec<_> =
+            e.scene.active().mesh.positions.iter().map(|p| Vec3::new(p.z, p.y, -p.x) + Vec3::X * 0.2).collect();
+        e.scene.active_mut().mesh.replace_positions(shifted);
+        e.oxymorph_set_compare(true);
+        e.camera.yaw = 0.21;
+        assert!(e.save(&path), "{}", e.status);
+        assert!(!e.is_modified());
+        let revision = e.history.revision();
+        e.oxymorph.as_mut().unwrap().set_brush(Some(MixBrush::KeepB));
+        let [x, y, w, h] = e.canvas;
+        e.pointer = Some(Vec2::new(x + w * 0.5, y + h * 0.5));
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::OxyMorphPaint));
+        e.pointer_up();
+        assert_eq!(e.history.revision(), revision);
+        assert!(e.is_modified(), "paint-only edits must prompt for saving");
+        assert!(e.documents[e.active_document].needs_autosave());
+        assert!(e.save(&path), "{}", e.status);
+
+        let saved = format::load(&path).unwrap();
+        let morph = saved.oxymorph.as_ref().unwrap();
+        let (a_src, b_src) = (&saved.pieces[morph.a as usize].mesh, &saved.pieces[morph.b as usize].mesh);
+        let expected: Vec<_> = morph
+            .vertices
+            .iter()
+            .zip(&a_src.positions)
+            .map(|(&(b, pins), &a)| pins.position(a, b_src.positions[b as usize], morph.mix))
+            .collect();
+        let pinned = morph.vertices.iter().position(|&(_, weight)| weight.pins()[1] == 1.0).unwrap();
+        let mut reopened = editor();
+        reopened.canvas_full = e.canvas_full;
+        assert!(reopened.open_project_now(&path), "{}", reopened.status);
+        let (pane, [a, b]) = reopened.oxymorph_comparison().unwrap();
+        assert_eq!(pane, ComparePane::Mix);
+        assert_eq!(reopened.camera.yaw, 0.21);
+        assert!(reopened.scene.get(a).unwrap().multires.is_some());
+        assert!(!reopened.is_modified(), "opening a mix is not an edit");
+        let a_order = reopened.scene.get(a).unwrap().mesh.source_vertices().to_vec();
+        let a_index = a_order.iter().position(|&v| v as usize == pinned).unwrap();
+        let b_saved = morph.vertices[pinned].0;
+        let b_mesh = &mut reopened.scene.get_mut(b).unwrap().mesh;
+        let b_index = b_mesh.source_vertices().iter().position(|&v| v == b_saved).unwrap();
+        for (&rendered, &v) in reopened.oxymorph_preview_mesh_mut().unwrap().positions.iter().zip(&a_order) {
+            assert_eq!(rendered, expected[v as usize]);
+        }
+        let b_mesh = &mut reopened.scene.get_mut(b).unwrap().mesh;
+        b_mesh.positions[b_index] += Vec3::Y * 0.13;
+        b_mesh.update_after_move(&[b_index as u32]);
+        let moved = b_mesh.positions[b_index];
+        reopened.oxymorph_refresh_comparison();
+        assert_eq!(reopened.oxymorph_preview_mesh_mut().unwrap().positions[a_index], moved);
+
+        let mut bad = saved;
+        let bad_morph = bad.oxymorph.as_mut().unwrap();
+        bad_morph.vertices[1].0 = bad_morph.vertices[0].0;
+        format::save(&bad, &path).unwrap();
+        assert!(reopened.open_project_now(&path), "{}", reopened.status);
+        assert!(reopened.oxymorph.is_none());
+        assert_eq!(reopened.scene.pieces.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

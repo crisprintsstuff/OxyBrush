@@ -1,6 +1,6 @@
 # RFC 0056 — OxyMorph
 
-- **Status:** Beta. Native forking, live blending, paintable pins, and linked comparison implemented.
+- **Status:** Beta workflow implemented, including save and resume in `.oxb` projects.
 - **Scope:** Try two sculpt directions on one piece and paint a third version from them.
 
 ## 1. Concept
@@ -74,8 +74,7 @@ blocks for the feature.
   change can recover correspondence. The initial limit is 200,000 triangles
   at the displayed level. Mix positions and keep A's material and mesh
   attributes. Saved projects retain ordinary pieces. The in-progress
-  session and fork correspondence are scoped to the current project
-  session.
+  session and fork correspondence are saved once A and B are paired.
 
 ### Painted mix
 
@@ -110,11 +109,24 @@ blocks for the feature.
 
 ### Follow-up scope
 
-- Persist in-progress sessions with projects.
 - Limit the first pass to positions. Starting on dense imported meshes,
   mixing paint/materials, comparing different topology, changing
   subdivision levels within a session, and exporting animated blends need
   separate validation.
+
+### Save and resume
+
+- Save a project with OxyMorph open to keep the pair, blend amount,
+  painted pins, brush settings, camera, and comparison layout. Reopen
+  the project to continue sculpting or painting the mix. Autosave also
+  records paint-only changes. Undo history starts fresh on reopen.
+- Projects store the correspondence in the optional `OMPH` section,
+  using each mesh's saved vertex order. Loading checks that the mapping
+  is one-to-one and matches the oriented triangles before restoring the
+  mix. Older readers can skip the section and open the source pieces.
+- Closing the panel ends the current session. A save can carry the mix
+  only while both endpoints still match their recorded topology and
+  subdivision level.
 
 ## 4. Model
 
