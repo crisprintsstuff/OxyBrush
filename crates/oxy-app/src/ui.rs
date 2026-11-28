@@ -890,8 +890,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
                         .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
                 });
+                if ui.button("Materials panel…").clicked() {
+                    show_materials_panel(ui, ed);
+                    ui.close();
+                }
                 tips::menu(ui, "Material", "Matcaps and transmissive viewport materials", |ui| {
-                    material_target(ui, ed);
+                    quick_material_target(ui, ed);
                     lit_material_controls(ui, ed);
                     for m in MatcapPreset::ALL {
                         let resp = tips::hover(ui.radio(ed.is_chosen_matcap(m), m.label()), tips::matcap_tip(m));
@@ -3841,51 +3845,142 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.label(RichText::new("Materials").strong());
-                material_target(ui, ed);
+                quick_material_target(ui, ed);
                 lit_material_controls(ui, ed);
-                ui.horizontal(|ui| {
-                    for m in MatcapPreset::ALL {
-                        let t = widgets::material_texture(&ctx, m);
-                        let resp = widgets::thumb(ui, Some(&t), m.label(), ed.is_chosen_matcap(m), tips::matcap_tip(m));
-                        if resp.hovered() {
-                            ed.preview_choice(m);
-                        }
-                        if resp.clicked() {
-                            ed.choose_matcap(m);
-                        }
-                    }
-                });
-                if !ed.custom_matcaps.is_empty() {
-                    ui.label(RichText::new("Yours (right-click to remove)").weak().small());
-                    let mut remove = None;
-                    ui.horizontal_wrapped(|ui| {
-                        for i in 0..ed.custom_matcaps.len() {
-                            let m = &ed.custom_matcaps[i];
-                            let t = custom_matcap_texture(&ctx, m);
-                            let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
-                            let r = widgets::thumb(ui, Some(&t), &m.name, ed.is_chosen_custom_matcap(i), &tip);
-                            if r.hovered() {
-                                ed.preview_custom_choice(i);
-                            }
-                            if r.clicked() {
-                                ed.choose_custom_matcap(i);
-                            }
-                            r.context_menu(|ui| {
-                                if tips::hover(ui.button("Remove"), plain::REMOVE_MATCAP).clicked() {
-                                    remove = Some(i);
-                                }
-                            });
-                        }
-                    });
-                    if let Some(i) = remove {
-                        ed.remove_custom_matcap(i);
-                    }
-                }
-                if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
-                    ed.request_load_matcap = true;
+                matcap_swatches(ui, ed, false);
+                if ui.button("Open Materials panel…").clicked() {
+                    show_materials_panel(ui, ed);
+                    ui.close();
                 }
             });
     });
+}
+
+fn matcap_swatches(ui: &mut Ui, ed: &mut Editor, wrap: bool) {
+    let ctx = ui.ctx().clone();
+    let draw_presets = |ui: &mut Ui| {
+        for m in MatcapPreset::ALL {
+            let t = widgets::material_texture(&ctx, m);
+            let resp = widgets::thumb(ui, Some(&t), m.label(), ed.is_chosen_matcap(m), tips::matcap_tip(m));
+            if resp.hovered() {
+                ed.preview_choice(m);
+            }
+            if resp.clicked() {
+                ed.choose_matcap(m);
+            }
+        }
+    };
+    if wrap {
+        ui.horizontal_wrapped(draw_presets);
+    } else {
+        ui.horizontal(draw_presets);
+    }
+    if !ed.custom_matcaps.is_empty() {
+        ui.label(RichText::new("Yours (right-click to remove)").weak().small());
+        let mut remove = None;
+        ui.horizontal_wrapped(|ui| {
+            for i in 0..ed.custom_matcaps.len() {
+                let m = &ed.custom_matcaps[i];
+                let t = custom_matcap_texture(&ctx, m);
+                let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
+                let r = widgets::thumb(ui, Some(&t), &m.name, ed.is_chosen_custom_matcap(i), &tip);
+                if r.hovered() {
+                    ed.preview_custom_choice(i);
+                }
+                if r.clicked() {
+                    ed.choose_custom_matcap(i);
+                }
+                r.context_menu(|ui| {
+                    if tips::hover(ui.button("Remove"), plain::REMOVE_MATCAP).clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+        });
+        if let Some(i) = remove {
+            ed.remove_custom_matcap(i);
+        }
+    }
+    if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
+        ed.request_load_matcap = true;
+    }
+}
+
+const MATERIALS_ID: &str = "materials_inspector";
+const REVEAL_MATERIALS: &str = "reveal_materials_inspector";
+
+fn show_materials_panel(ui: &Ui, ed: &mut Editor) {
+    ed.show_panels = true;
+    ed.show_inspector = true;
+    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique(REVEAL_MATERIALS), true));
+    ui.ctx().request_repaint();
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaterialsTab {
+    Matcaps,
+    Glass,
+    Fur,
+}
+
+fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    let reveal =
+        ui.ctx().data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(REVEAL_MATERIALS))).unwrap_or(false);
+    if reveal {
+        ui.scroll_to_cursor(Some(egui::Align::Center));
+    }
+    let has_fur = ed.scene.try_active().is_some_and(|piece| piece.fur.is_some());
+    widgets::section_with_id(
+        ui,
+        MATERIALS_ID,
+        "Materials",
+        "Matcaps, viewport glass and fur coats.",
+        has_fur,
+        reveal.then_some(true),
+        |ui| {
+            let id = ui.scope_id().with("materials_tab");
+            let default_tab = if has_fur {
+                MaterialsTab::Fur
+            } else if ed
+                .scene
+                .try_active()
+                .and_then(|p| p.material.as_deref())
+                .and_then(oxy_render::GlassMaterial::from_key)
+                .is_some()
+            {
+                MaterialsTab::Glass
+            } else {
+                MaterialsTab::Matcaps
+            };
+            let mut tab = ui.data_mut(|data| data.get_temp::<MaterialsTab>(id)).unwrap_or(default_tab);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut tab, MaterialsTab::Matcaps, "Matcaps");
+                ui.selectable_value(&mut tab, MaterialsTab::Glass, "Glass");
+                ui.selectable_value(&mut tab, MaterialsTab::Fur, "Fur");
+            });
+            ui.data_mut(|data| data.insert_temp(id, tab));
+            match tab {
+                MaterialsTab::Matcaps => {
+                    material_target(ui, ed);
+                    lit_material_controls(ui, ed);
+                    matcap_swatches(ui, ed, true);
+                }
+                MaterialsTab::Glass | MaterialsTab::Fur => {
+                    let Some(piece) = ed.scene.try_active() else {
+                        ui.label("Select a piece.");
+                        return;
+                    };
+                    ui.label(egui::RichText::new(&piece.name).small().strong());
+                    if tab == MaterialsTab::Glass {
+                        use_scene_material(ui, ed);
+                        glass_controls(ui, ed);
+                    } else {
+                        crate::fur::section(ui, ed, busy);
+                    }
+                }
+            }
+        },
+    );
 }
 
 /// Scene-wide surface settings used by viewport lighting, regardless of the
@@ -3977,17 +4072,26 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
             ed.material_for_piece = true;
         }
     });
-    if ed.material_for_piece
-        && ed.scene.try_active().is_some_and(|p| p.material.is_some())
+    if ed.material_for_piece {
+        use_scene_material(ui, ed);
+    }
+}
+
+fn quick_material_target(ui: &mut Ui, ed: &mut Editor) {
+    material_target(ui, ed);
+    if ed.material_for_piece {
+        glass_controls(ui, ed);
+    }
+}
+
+fn use_scene_material(ui: &mut Ui, ed: &mut Editor) {
+    if ed.scene.try_active().is_some_and(|p| p.material.is_some())
         && ui
             .small_button("Use the scene's material")
             .on_hover_text("The active piece goes back to showing the scene's material.")
             .clicked()
     {
         ed.set_piece_material(None);
-    }
-    if ed.material_for_piece {
-        glass_controls(ui, ed);
     }
 }
 
@@ -4008,7 +4112,7 @@ fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     let Some(stored) = stored else { return };
-    let id = ui.scope_id().with(("glass_draft", ed.id, piece_id));
+    let id = egui::Id::unique(("glass_draft", ed.id, piece_id));
     let mut draft = ui
         .data_mut(|d| d.get_temp::<(GlassMaterial, GlassMaterial)>(id))
         .filter(|(original, _)| *original == stored)
@@ -5823,6 +5927,7 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     // Mode-aware defaults: keep the panel short while sculpting; hide brush
     // stacks during Poly Edit / Retopo / OxySpheres / Tube.
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
+    materials_panel(ui, ed, busy || modeling);
     if !focus {
         let layers_open = ed.living.enabled;
         widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| {
@@ -5834,10 +5939,6 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         });
     }
     if !modeling {
-        let has_fur = ed.scene.try_active().is_some_and(|piece| piece.fur.is_some());
-        widgets::section(ui, "Fur coat", "Grow short strands that follow the surface of this piece.", has_fur, |ui| {
-            crate::fur::section(ui, ed, busy)
-        });
         let brush_title = format!("{} brush", ed.brush_kind.label());
         widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
         if !focus {
@@ -5846,7 +5947,7 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 Some(a) => format!("Alpha: {}", a.name),
                 None => "Alpha".into(),
             };
-            widgets::section_with_id(ui, "Alpha", &alpha_title, plain::SECTION_ALPHA, false, |ui| {
+            widgets::section_with_id(ui, "Alpha", &alpha_title, plain::SECTION_ALPHA, false, None, |ui| {
                 alpha_section(ui, ed)
             });
         }

@@ -6,7 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
-- **Fur coat.** Grow a short preview coat on a piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Growing, resizing, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
+- **Fur coat.** Grow a short preview coat on a piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Comb strokes lean the strands as you drag. Growing, resizing, grooming, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
+- **Materials panel.** Open the inspector’s Matcaps, Glass, and Fur tabs from **View > Materials panel…** or from the shelf material picker.
 
 ## [4.2.0] - 2026-11-28
 

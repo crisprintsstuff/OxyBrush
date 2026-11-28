@@ -308,7 +308,15 @@ impl Change {
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
-            Change::Fur { coat, .. } => 32 + coat.as_ref().map_or(0, |coat| coat.roots.len() * 20),
+            Change::Fur { coat, .. } => {
+                32 + coat.as_ref().map_or(0, |coat| {
+                    coat.roots.len() * std::mem::size_of::<oxy_mesh::fur::Root>()
+                        + coat.groom.as_ref().map_or(0, |groom| {
+                            groom.guide_roots.len() * 12
+                                + groom.influences.len() * std::mem::size_of::<oxy_mesh::fur::Influence>()
+                        })
+                })
+            }
             Change::Visible { .. } | Change::Reorder { .. } | Change::Parent { .. } => 16,
             Change::Material { key, .. } => 32 + key.as_ref().map_or(0, String::capacity),
             Change::Link { .. } => 80,
