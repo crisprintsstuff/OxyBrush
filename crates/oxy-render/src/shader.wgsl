@@ -59,6 +59,7 @@ struct Piece {
     // rgb: the Tint look's color (linear)
     inactive_color: vec4<f32>,
     glass_tint: vec4<f32>,
+    // x: roughness, y: encoded frost seed, z: absorption per scene unit, w: exit refraction
     glass_surface: vec4<f32>,
 };
 
@@ -644,6 +645,111 @@ struct GlassViewport {
 @group(2) @binding(0) var<uniform> glass_view: GlassViewport;
 @group(2) @binding(1) var glass_scene: texture_2d<f32>;
 @group(2) @binding(2) var glass_scene_depth: texture_2d<f32>;
+@group(2) @binding(3) var glass_back: texture_2d<f32>;
+
+struct GlassBack {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) view_depth: f32,
+};
+
+@vertex
+fn vs_glass_back(v: VsIn) -> GlassBack {
+    let pos = vec4<f32>(v.position, 1.0);
+    return GlassBack(u.view_proj * pos, -(u.view * pos).z);
+}
+
+@fragment
+fn fs_glass_back(i: GlassBack) -> @location(0) f32 {
+    return i.view_depth;
+}
+
+struct GlassExitSurface {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) view_depth: f32,
+    @location(1) view_normal: vec3<f32>,
+};
+
+@vertex
+fn vs_glass_exit(v: VsIn) -> GlassExitSurface {
+    let pos = vec4<f32>(v.position, 1.0);
+    return GlassExitSurface(u.view_proj * pos, -(u.view * pos).z, (u.view * vec4<f32>(v.normal, 0.0)).xyz);
+}
+
+@fragment
+fn fs_glass_exit(i: GlassExitSurface) -> @location(0) vec4<f32> {
+    return vec4<f32>(i.view_depth, i.view_normal);
+}
+
+fn glass_project(pos: vec3<f32>) -> vec2<f32> {
+    let scale = select(-pos.z, 1.0, glass_view.proj.z > 0.5);
+    let ndc = pos.xy / (glass_view.proj.xy * scale);
+    return glass_view.rect.xy + (vec2<f32>(0.5) + ndc * vec2<f32>(0.5, -0.5)) * glass_view.rect.zw;
+}
+
+fn glass_unproject(pixel: vec2<f32>, depth: f32) -> vec3<f32> {
+    let scale = select(depth, 1.0, glass_view.proj.z > 0.5);
+    let ndc = ((pixel - glass_view.rect.xy) / glass_view.rect.zw - vec2<f32>(0.5)) * vec2<f32>(2.0, -2.0);
+    return vec3<f32>(ndc * glass_view.proj.xy * scale, -depth);
+}
+
+struct GlassExit {
+    pixel: vec2<f32>,
+    path: f32,
+    total_internal_reflection: bool,
+};
+
+// The back buffer belongs to this piece. Intersect the inside ray with the
+// sampled exit surface's tangent plane, and check that it projects back
+// into the same texel. A few refinements let the lookup follow curved glass.
+fn glass_trace_exit(i: VsOut, inside: vec3<f32>, ior: f32, first: vec4<f32>) -> GlassExit {
+    let miss = GlassExit(i.clip.xy, 0.0, false);
+    if (first.r == 0.0 || first.r <= i.view_depth || inside.z >= -0.05) {
+        return miss;
+    }
+    var pixel = i.clip.xy;
+    var surface = first;
+    for (var step = 0; step < 4; step++) {
+        let texel_center = floor(pixel) + vec2<f32>(0.5);
+        let normal = normalize(surface.gba);
+        let approach = dot(inside, normal);
+        if (surface.r == 0.0 || surface.r <= i.view_depth || !(approach > 0.05)) {
+            return miss;
+        }
+        let point = glass_unproject(texel_center, surface.r);
+        let path = dot(point - i.view_pos, normal) / approach;
+        if (path <= 0.00001) {
+            return miss;
+        }
+        let exit = i.view_pos + inside * path;
+        pixel = glass_project(exit);
+        if (any(pixel < glass_view.rect.xy) || any(pixel >= glass_view.rect.xy + glass_view.rect.zw)) {
+            return miss;
+        }
+        let error = abs(pixel - texel_center);
+        if (max(error.x, error.y) <= 0.65) {
+            let depth = -exit.z;
+            let background_depth = textureLoad(glass_scene_depth, vec2<i32>(i.clip.xy), 0).w;
+            if (background_depth > i.view_depth && background_depth <= depth) {
+                return miss;
+            }
+            // Snell's law with the ratio reversed (glass to air).
+            let outside = refract(inside, -normal, ior);
+            if (dot(outside, outside) < 0.01) {
+                return GlassExit(pixel, path, true);
+            }
+            if (outside.z >= -0.05) {
+                return miss;
+            }
+            // Reference images and the clear color have no scene depth.
+            let backdrop = select(depth + glass_view.params.w * 0.25, background_depth, background_depth > depth);
+            let screen = glass_project(exit + outside * ((backdrop - depth) / -outside.z));
+            let limit = vec2<f32>(glass_view.rect.w * 0.176);
+            return GlassExit(i.clip.xy + clamp(screen - i.clip.xy, -limit, limit), path, false);
+        }
+        surface = textureLoad(glass_back, vec2<i32>(pixel), 0);
+    }
+    return miss;
+}
 
 fn glass_behind(pixel: vec2<f32>, fallback: vec2<f32>, depth: f32) -> vec3<f32> {
     let lo = glass_view.rect.xy;
@@ -684,9 +790,8 @@ const FROST_TAPS = array(
     vec2<f32>(0.0, -1.0), vec2<f32>(0.7071, -0.7071),
 );
 
-// Dielectric Fresnel (Schlick approximation), a single entry refraction
-// and a screen-space footprint. Multiple bounces and offscreen objects
-// require a different renderer.
+// Dielectric Fresnel (Schlick approximation) and a screen-space footprint.
+// The exit surface is optional. Multiple bounces would need another ray.
 @fragment
 fn fs_glass(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
     let n = normalize(select(-i.view_normal, i.view_normal, front));
@@ -695,7 +800,25 @@ fn fs_glass(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let ray = refract(-view, n, 1.0 / ior);
     let slope = ray.xy / max(abs(ray.z), 0.25) + view.xy / max(abs(view.z), 0.25);
     let shift = clamp(slope * vec2<f32>(1.0, -1.0), vec2<f32>(-0.8), vec2<f32>(0.8));
-    let screen = i.clip.xy + shift * glass_view.rect.w * 0.22;
+    var screen = i.clip.xy + shift * glass_view.rect.w * 0.22;
+    var tint = piece.glass_tint.rgb;
+    var internal_reflection = false;
+    if (front && (piece.glass_surface.z > 0.0 || piece.glass_surface.w > 0.0)) {
+        let back = textureLoad(glass_back, vec2<i32>(i.clip.xy), 0);
+        var path = select(0.0, (back.r - i.view_depth) / max(view.z, 0.25), back.r != 0.0);
+        if (piece.glass_surface.w > 0.0) {
+            let hit = glass_trace_exit(i, ray, ior, back);
+            if (hit.path > 0.0) {
+                path = hit.path;
+                screen = hit.pixel;
+                internal_reflection = hit.total_internal_reflection;
+            }
+        }
+        if (path > 0.00001 && piece.glass_surface.z > 0.0) {
+            // Beer–Lambert transmittance uses the picked tint at one unit.
+            tint = pow(tint, vec3<f32>(path * piece.glass_surface.z));
+        }
+    }
     var roughness = piece.glass_surface.x;
     if (piece.glass_surface.y > 0.0) {
         let noise = frost_cell(i.world_pos * 22.0, piece.glass_surface.y);
@@ -713,11 +836,12 @@ fn fs_glass(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     }
     let f = (ior - 1.0) / (ior + 1.0);
     let facing = clamp(dot(view, n), 0.0, 1.0);
-    let reflection = select(0.0, f * f + (1.0 - f * f) * pow(1.0 - facing, 5.0), ior > 1.001);
+    let fresnel = select(0.0, f * f + (1.0 - f * f) * pow(1.0 - facing, 5.0), ior > 1.001);
+    let reflection = select(fresnel, 1.0, internal_reflection);
     let reflected = reflect(-view, n);
     let studio = mix(0.16, 0.8, smoothstep(-0.45, 0.65, reflected.y));
     let key = pow(max(dot(reflected, normalize(vec3<f32>(-0.35, 0.55, 0.65))), 0.0), mix(110.0, 8.0, roughness));
-    var color = mix(transmitted * piece.glass_tint.rgb, vec3<f32>(studio + key), reflection);
+    var color = mix(transmitted * tint, vec3<f32>(studio + key), reflection);
     color = mix(color, color * u.mask_color.rgb, clamp(i.mask, 0.0, 1.0) * u.params.y);
     return vec4<f32>(color, 1.0);
 }

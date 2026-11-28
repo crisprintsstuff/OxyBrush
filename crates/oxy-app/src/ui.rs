@@ -4016,6 +4016,10 @@ fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.add(widgets::Bar(egui::Slider::new(&mut draft.roughness, 0.0..=1.0).text("Roughness")));
     ui.add(widgets::Bar(egui::Slider::new(&mut draft.ior, 1.0..=2.5).text("Refraction (IOR)")))
         .on_hover_text("Controls how far the glass bends what you see behind it.");
+    ui.checkbox(&mut draft.exit_refraction, "Exit refraction")
+        .on_hover_text("Bend light again where it leaves a closed piece. Uses an extra viewport pass.");
+    ui.add(widgets::Bar(egui::Slider::new(&mut draft.absorption, 0.0..=4.0).text("Absorption")))
+        .on_hover_text("Deepens a colored tint through thicker glass. At zero, tint is uniform.");
     ui.collapsing("Tint", |ui| {
         let [r, g, b] = draft.tint;
         let mut hsv = egui::ecolor::Hsva::from(Color32::from_rgb(r, g, b));
