@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Fur coat.** Grow a short preview coat on a piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Growing, resizing, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
+
 ## [4.2.0] - 2026-11-28
 
 ### Added

@@ -1153,6 +1153,10 @@ pub enum JobResult {
     /// Surface instances made real (RFC 0022): the new piece's name, its
     /// mesh and how many copies it holds.
     MadeReal(String, Mesh, usize),
+    Fur {
+        coat: Arc<oxy_mesh::fur::Coat>,
+        source: [u64; 3],
+    },
     /// A new mesh (remesh, merge, decimate); subdivision levels are dropped.
     Mesh(Mesh),
     /// New pieces to add after the target (e.g. a LOD chain), as (name, mesh).
@@ -9660,6 +9664,19 @@ impl Editor {
                     st
                 }
             }
+            Ok(JobResult::Fur { coat, source }) => {
+                let doc = &mut self.documents[doc_idx];
+                let Some(piece) = doc.scene.get_mut(job.target) else {
+                    return "Fur generation cancelled because the piece was removed".into();
+                };
+                if crate::fur::versions(&piece.mesh) != source {
+                    return "Fur generation cancelled because the surface changed".into();
+                }
+                let strands = coat.roots.len();
+                let previous = piece.fur.replace(coat);
+                doc.history.record("Grow fur coat", Step::Fur { piece: piece.id, previous });
+                format!("Grew a fur coat with {strands} strands")
+            }
             Ok(JobResult::MadeReal(name, mesh, copies)) => {
                 let doc = &mut self.documents[doc_idx];
                 let name = doc.scene.unique_name(&name);
@@ -14981,6 +14998,42 @@ mod tests {
         e.max_triangles = before.triangle_count() + 10;
         e.subdivide_masked();
         assert!(e.status.contains("limit"), "{}", e.status);
+    }
+
+    #[test]
+    fn grow_fur_is_undoable_and_preserves_roots_across_save_and_reopen() {
+        let mut e = editor();
+        use oxy_mesh::fur::Settings;
+        let settings = Settings { spacing: 0.15, ..Settings::for_span(2.0) };
+        e.generate_fur(settings);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !e.poll_job() {
+            assert!(std::time::Instant::now() < deadline, "the fur job did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(e.scene.pieces.len(), 1);
+        let coat = e.scene.active().fur.clone().expect("the worker grows a coat");
+        assert!(!coat.roots.is_empty());
+        e.undo();
+        assert!(e.scene.active().fur.is_none());
+        e.redo();
+        assert_eq!(e.scene.active().fur.as_deref(), Some(coat.as_ref()));
+        let mesh = &mut e.scene.active_mut().mesh;
+        let delta = Vec3::new(0.21, -0.18, 0.3);
+        mesh.replace_positions(mesh.positions.iter().map(|p| Vec3::new(p.z, p.y, -p.x) + delta).collect());
+        let before = coat.transforms(mesh);
+
+        let saved = format::decode(&format::encode(&e.scene_data())).unwrap();
+        let reopened = Scene::from_data(saved).unwrap();
+        let piece = reopened.active();
+        let restored = piece.fur.as_ref().unwrap();
+        assert!(restored.fits(&piece.mesh));
+        assert_eq!(restored.settings, settings);
+        let after = restored.transforms(&piece.mesh);
+        assert_eq!(before.len(), after.len());
+        for (before, after) in before.iter().zip(after) {
+            assert!((before.w_axis - after.w_axis).length() < 1e-5);
+        }
     }
 
     #[test]

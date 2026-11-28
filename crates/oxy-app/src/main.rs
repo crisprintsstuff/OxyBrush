@@ -12,6 +12,7 @@ mod color_filter_ui;
 mod deform_ui;
 mod document;
 mod editor;
+mod fur;
 mod gizmo_ops;
 mod group_paint;
 mod guide;

@@ -15,6 +15,7 @@ pub mod color_filter;
 pub mod contour;
 pub mod deform;
 pub mod dyntopo;
+pub mod fur;
 pub mod instances;
 pub mod knife;
 pub mod morph;

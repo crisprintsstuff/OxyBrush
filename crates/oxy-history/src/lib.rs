@@ -18,6 +18,7 @@ use oxy_mesh::Mesh;
 use oxy_mesh::multires::Multires;
 use oxy_mesh::retopo::Cage;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 mod compress;
 
@@ -76,6 +77,10 @@ enum Change {
         piece: u64,
         list: Vec<oxy_doc::Instancer>,
     },
+    Fur {
+        piece: u64,
+        coat: Option<Arc<oxy_mesh::fur::Coat>>,
+    },
     /// The piece is shown or hidden (used with instancers, whose source is hidden).
     Visible {
         piece: u64,
@@ -107,27 +112,64 @@ enum Change {
 /// Building blocks for compound operations (e.g. merging pieces).
 pub enum Step {
     /// The previous project reference list. Pixel buffers are shared.
-    References { previous: Vec<oxy_doc::ReferenceImage> },
+    References {
+        previous: Vec<oxy_doc::ReferenceImage>,
+    },
     /// The piece's mesh was replaced; `previous` is the old mesh.
-    Topology { piece: u64, previous: Mesh, previous_multires: Option<Multires> },
+    Topology {
+        piece: u64,
+        previous: Mesh,
+        previous_multires: Option<Multires>,
+    },
     /// A piece was inserted at `index`.
-    Inserted { index: usize },
+    Inserted {
+        index: usize,
+    },
     /// `piece` was removed from `index`.
-    Removed { index: usize, piece: Box<Piece> },
+    Removed {
+        index: usize,
+        piece: Box<Piece>,
+    },
     /// A piece was moved from `from` to `to` in the pieces list.
-    Reordered { from: usize, to: usize },
+    Reordered {
+        from: usize,
+        to: usize,
+    },
     /// The piece's mesh and retopology cage were replaced; these are the old ones.
-    Cage { piece: u64, previous: Mesh, previous_cage: Option<Cage> },
+    Cage {
+        piece: u64,
+        previous: Mesh,
+        previous_cage: Option<Cage>,
+    },
     /// The piece's surface instancers changed; these are the old ones.
-    Instancers { piece: u64, previous: Vec<oxy_doc::Instancer> },
+    Instancers {
+        piece: u64,
+        previous: Vec<oxy_doc::Instancer>,
+    },
+    Fur {
+        piece: u64,
+        previous: Option<Arc<oxy_mesh::fur::Coat>>,
+    },
     /// The piece was shown or hidden; this is whether it was visible.
-    Visible { piece: u64, previous: bool },
+    Visible {
+        piece: u64,
+        previous: bool,
+    },
     /// The piece's material key before the change.
-    Material { piece: u64, previous: Option<String> },
+    Material {
+        piece: u64,
+        previous: Option<String>,
+    },
     /// The piece's parent was changed; this is its previous parent id.
-    Parent { piece: u64, previous: Option<u64> },
+    Parent {
+        piece: u64,
+        previous: Option<u64>,
+    },
     /// The piece's link (linked copy) was changed; this is the old one.
-    Link { piece: u64, previous: Option<oxy_doc::PieceLink> },
+    Link {
+        piece: u64,
+        previous: Option<oxy_doc::PieceLink>,
+    },
 }
 
 impl From<Step> for Change {
@@ -143,6 +185,7 @@ impl From<Step> for Change {
                 Change::Cage { piece, mesh: Box::new(previous), cage: previous_cage.map(Box::new) }
             }
             Step::Instancers { piece, previous } => Change::Instancers { piece, list: previous },
+            Step::Fur { piece, previous } => Change::Fur { piece, coat: previous },
             Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
             Step::Material { piece, previous } => Change::Material { piece, key: previous },
             Step::Reordered { from, to } => Change::Reorder { from: to, to: from },
@@ -214,6 +257,7 @@ impl Change {
             | Change::Faces { piece, .. }
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
+            | Change::Fur { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Material { piece, .. }
             | Change::Parent { piece, .. }
@@ -238,6 +282,7 @@ impl Change {
             | Change::Faces { piece, .. }
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
+            | Change::Fur { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Material { piece, .. }
             | Change::Parent { piece, .. }
@@ -263,6 +308,7 @@ impl Change {
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
+            Change::Fur { coat, .. } => 32 + coat.as_ref().map_or(0, |coat| coat.roots.len() * 20),
             Change::Visible { .. } | Change::Reorder { .. } | Change::Parent { .. } => 16,
             Change::Material { key, .. } => 32 + key.as_ref().map_or(0, String::capacity),
             Change::Link { .. } => 80,
@@ -329,6 +375,11 @@ impl Change {
             Change::Instancers { piece, list } => {
                 let p = scene.get_mut(*piece)?;
                 std::mem::swap(&mut p.instancers, list);
+                Some(*piece)
+            }
+            Change::Fur { piece, coat } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.fur, coat);
                 Some(*piece)
             }
             Change::Visible { piece, visible } => {

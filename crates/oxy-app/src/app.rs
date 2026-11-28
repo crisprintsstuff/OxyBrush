@@ -69,6 +69,7 @@ pub struct App {
     /// The generation of each surface-instance buffer last sent to the
     /// renderer, so transforms are uploaded only when they change.
     instance_uploaded: std::collections::HashMap<u64, u64>,
+    fur_preview: crate::fur::Preview,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
     /// Latest pressure event from platforms that deliver the pen as a mouse.
@@ -271,6 +272,7 @@ impl App {
             applied_matcap: None,
             material_slots: vec![None; oxy_render::MATERIAL_SLOTS as usize],
             instance_uploaded: Default::default(),
+            fur_preview: Default::default(),
             mmb_scroll: None,
             last_pressure: None,
             pen_press: None,
@@ -865,6 +867,7 @@ impl App {
                 || (morph_pair.is_some() && id == MIX_ID)
                 || (compare.is_some() && ed.scene.get(id).is_some())
                 || kept_proxies.contains(&id)
+                || crate::fur::strand_host(id).is_some_and(|host| ed.scene.get(host).is_some_and(|p| p.fur.is_some()))
         });
         let active = ed.scene.try_active().map(|p| p.id).unwrap_or(0);
         // Pieces with their own material: give each distinct one a slot.
@@ -980,7 +983,26 @@ impl App {
         }
         // Surface instances: the source's mesh, drawn once per copy. The
         // transforms are uploaded only when they change.
-        let draws = if compare.is_some() { Vec::new() } else { ed.instance_draws() };
+        let mut draws = if compare.is_some() { Vec::new() } else { ed.instance_draws() };
+        let hosts: Vec<_> = ed
+            .scene
+            .pieces
+            .iter()
+            .filter(|p| {
+                compare.is_none()
+                    && p.fur.is_some()
+                    && p.visible
+                    && p.multires.is_none()
+                    && Some(p.id) != curve_piece
+                    && Some(p.id) != retopo_piece
+                    && !morph_pair.is_some_and(|pair| pair.contains(&p.id))
+            })
+            .collect();
+        let fur_draws = self.fur_preview.draws(&hosts);
+        for draw in &fur_draws {
+            g.viewport.sync(&g.device, &g.queue, draw.source, self.fur_preview.strand_mut(), hard_edge_angle, false);
+        }
+        draws.extend(fur_draws);
         let scatter_pending = ed.instance_scatter_pending();
         for d in &draws {
             if morph_pair.is_some_and(|pair| pair.contains(&d.host)) {
@@ -994,7 +1016,7 @@ impl App {
                 id: d.source,
                 active: d.host == active,
                 preview: false,
-                material: slot_of(d.source),
+                material: slot_of(crate::fur::strand_host(d.source).unwrap_or(d.source)),
                 instances: Some(d.key),
                 wireframe: false,
                 color_map: false,

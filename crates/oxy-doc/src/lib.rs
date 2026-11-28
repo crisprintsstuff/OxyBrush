@@ -12,6 +12,7 @@ use glam::{Mat4, Vec3};
 use oxy_mesh::multires::Multires;
 use oxy_mesh::retopo::Cage;
 use oxy_mesh::{Aabb, Mesh, MeshData};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_PIECE_ID: AtomicU64 = AtomicU64::new(1);
@@ -63,6 +64,8 @@ pub struct Piece {
     /// Surface instances on this piece (RFC 0022): copies of other pieces
     /// placed on its surface, written as the `INST` section.
     pub instancers: Vec<Instancer>,
+    /// The surface fur coat owned by this piece, stored in the FUR1 section.
+    pub fur: Option<Arc<oxy_mesh::fur::Coat>>,
     /// The piece this piece is parented to, if any. Transforming the parent
     /// transforms this piece and all other descendants with it.
     pub parent: Option<u64>,
@@ -315,6 +318,7 @@ impl Piece {
             strokes: None,
             material: None,
             instancers: Vec::new(),
+            fur: None,
             parent: None,
             link: None,
             own_level: None,
@@ -388,6 +392,7 @@ impl Piece {
                     strokes: None,
                     material: self.material.clone(),
                     instancers: Vec::new(),
+                    fur: self.fur.clone(),
                     parent: None,
                     link: None,
                     own_level: None,
@@ -409,6 +414,7 @@ impl Piece {
                 strokes: None,
                 material: self.material.clone(),
                 instancers: Vec::new(),
+                fur: self.fur.clone(),
                 parent: None,
                 link: None,
                 own_level: None,
@@ -451,6 +457,7 @@ pub struct PieceData {
     /// The `INST` section: surface instances. Filled in by
     /// [`Scene::to_data`], which knows the pieces' places in the list.
     pub instancers: Vec<SavedInstancer>,
+    pub fur: Option<Arc<oxy_mesh::fur::Coat>>,
     /// The `PARN` section: parent piece index. Filled in by [`Scene::to_data`].
     pub parent: Option<u32>,
     /// The `LINK` section: the original's index and the transform, when
@@ -522,7 +529,15 @@ impl PieceData {
         if let Some(recipe) = self.spheres.as_deref_mut() {
             recipe.generated_mesh = None;
         }
+        let fur_fits_saved_mesh = self.fur.as_ref().is_some_and(|coat| {
+            self.multires.is_none()
+                && coat.topology == oxy_mesh::fur::topology_signature(self.mesh.positions.len(), &self.mesh.triangles)
+        });
         let mesh = Mesh::from_data(self.mesh);
+        let fur = self.fur.and_then(|mut coat| {
+            let valid = !fur_fits_saved_mesh || Arc::make_mut(&mut coat).renumber_after_load(&mesh);
+            valid.then_some(coat)
+        });
         if let Some(p) = self.polygons.as_ref().filter(|_| self.multires.is_none()) {
             p.apply(&mesh);
         }
@@ -573,6 +588,7 @@ impl PieceData {
             strokes,
             material: self.material,
             instancers: Vec::new(),
+            fur,
             parent: None,
             link: None,
             own_level: self.own_level,

@@ -41,6 +41,8 @@
 //!   Glass RGB channels are sRGB bytes, and SEED is zero for smooth glass
 //!   or the frost seed plus one.
 //!   Readers fall back to the scene's matcap for unfamiliar keys.
+//! - `FUR1` (optional): a piece's viewport fur settings and roots in saved
+//!   triangle order. Older readers open the piece without the coat.
 //! - `INST` (optional, since 4.0.0-beta.12): surface instances on the
 //!   **preceding** `PIEC` (RFC 0022): `count:u32` then per instancer
 //!   `source:u32` (the source piece's place among the file's pieces, from
@@ -394,6 +396,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(m) = &p.material {
             sections.push((*b"MATL", m.as_bytes().to_vec()));
+        }
+        if let Some(coat) = &p.fur {
+            sections.push((*b"FUR1", encode_fur(coat)));
         }
         if p.instancers.iter().any(|ins| ins.settings.place.needs_ins3()) {
             let legacy: Vec<_> = p.instancers.iter().filter(|ins| !ins.settings.place.extended()).cloned().collect();
@@ -1109,6 +1114,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 match String::from_utf8(raw.clone()) {
                     Ok(m) if !m.is_empty() && m.len() <= 512 => piece.material = Some(m),
                     _ => log::warn!("ignoring a damaged material on piece {:?}", piece.name),
+                }
+            }
+            b"FUR1" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("FUR1 before any piece".into()))?;
+                match decode_fur(&raw) {
+                    Ok(coat) => piece.fur = Some(coat.into()),
+                    Err(e) => log::warn!("ignoring a damaged fur coat on piece {:?}: {e}", piece.name),
                 }
             }
             b"INST" | b"INS2" | b"INS3" => {
@@ -1885,6 +1897,62 @@ fn decode_tube_shapes(raw: &[u8]) -> Result<Vec<(oxy_mesh::primitives::TubeShape
         .collect()
 }
 
+/// A FUR1 coat is the topology signature, region and settings, then a
+/// counted array of (face, three barycentric weights, random key).
+fn encode_fur(coat: &oxy_mesh::fur::Coat) -> Vec<u8> {
+    use oxy_mesh::fur::Region;
+    let mut bytes = Vec::with_capacity(33 + coat.roots.len() * 20);
+    bytes.extend_from_slice(&coat.topology.to_le_bytes());
+    let settings = coat.settings;
+    let (region, group) = match settings.region {
+        Region::Whole => (0, 0u32),
+        Region::Masked => (1, 0),
+        Region::Group(group) => (2, group),
+    };
+    bytes.push(region);
+    bytes.extend_from_slice(&group.to_le_bytes());
+    for dimension in [settings.spacing, settings.length, settings.width] {
+        bytes.extend_from_slice(&dimension.to_le_bytes());
+    }
+    bytes.extend_from_slice(&settings.seed.to_le_bytes());
+    bytes.extend_from_slice(&(coat.roots.len() as u32).to_le_bytes());
+    for root in &coat.roots {
+        bytes.extend_from_slice(&root.triangle.to_le_bytes());
+        for weight in root.weights {
+            bytes.extend_from_slice(&weight.to_le_bytes());
+        }
+        bytes.extend_from_slice(&root.key.to_le_bytes());
+    }
+    bytes
+}
+
+fn decode_fur(raw: &[u8]) -> Result<oxy_mesh::fur::Coat> {
+    use oxy_mesh::fur::{Coat, MAX_ROOTS, Region, Root, Settings};
+    let mut r = Reader { data: raw, pos: 0 };
+    let topology = r.u64()?;
+    let region = match (r.u8()?, r.u32()?) {
+        (0, 0) => Region::Whole,
+        (1, 0) => Region::Masked,
+        (2, group) => Region::Group(group),
+        _ => return Err(Error::Corrupt("unknown fur region".into())),
+    };
+    let settings = Settings { region, spacing: r.f32()?, length: r.f32()?, width: r.f32()?, seed: r.u32()? };
+    let count = r.u32()? as usize;
+    if !settings.valid() || count == 0 || count > MAX_ROOTS || r.remaining() != count * 20 {
+        return Err(Error::Corrupt("invalid fur settings or root count".into()));
+    }
+    let mut roots = Vec::with_capacity(count);
+    for _ in 0..count {
+        let triangle = r.u32()?;
+        let weights = [r.f32()?, r.f32()?, r.f32()?];
+        if !weights.iter().all(|v| (0.0..=1.0).contains(v)) || (weights.iter().sum::<f32>() - 1.0).abs() > 0.001 {
+            return Err(Error::Corrupt("invalid fur root weights".into()));
+        }
+        roots.push(Root { triangle, weights, key: r.u32()? });
+    }
+    Ok(Coat { settings, topology, roots })
+}
+
 /// One instancer's bytes in `INST` / `INS2` (see the header).
 const INSTANCER_BYTES: usize = 47;
 /// `INS3` adds a trailing spacing float for scatter-on-mask / scatter-on-group.
@@ -2209,6 +2277,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         strokes: None,
         material: None,
         instancers: Vec::new(),
+        fur: None,
         parent: None,
         link: None,
         own_level: None,
@@ -2606,6 +2675,23 @@ mod tests {
     }
 
     #[test]
+    fn fur_section_round_trips_and_rejects_damaged_roots() {
+        use oxy_mesh::fur::{Coat, Settings};
+        let mut scene = sample();
+        let coat = Coat::generate(&scene.pieces[0].mesh, Settings::for_span(2.0));
+        assert!(!coat.roots.is_empty());
+        scene.pieces[0].fur = Some(coat.clone().into());
+        let bytes = encode(&scene);
+        assert_eq!(decode(&bytes).unwrap().pieces[0].fur.as_deref(), Some(&coat));
+
+        let mut section = encode_fur(&coat);
+        section[37..41].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(decode_fur(&section).is_err());
+        section.truncate(33);
+        assert!(decode_fur(&section).is_err());
+    }
+
+    #[test]
     fn brush_alphas_round_trip_and_a_damaged_one_is_skipped() {
         let mut scene = sample();
         let n = 4u32;
@@ -2650,6 +2736,7 @@ mod tests {
                     strokes: None,
                     material: None,
                     instancers: Vec::new(),
+                    fur: None,
                     parent: None,
                     link: None,
                     own_level: None,
@@ -2670,6 +2757,7 @@ mod tests {
                     strokes: None,
                     material: None,
                     instancers: Vec::new(),
+                    fur: None,
                     parent: None,
                     link: None,
                     own_level: None,
@@ -2871,6 +2959,7 @@ mod tests {
             }),
             material: None,
             instancers: Vec::new(),
+            fur: None,
             parent: None,
             link: None,
             own_level: None,
@@ -3671,6 +3760,7 @@ mod tests {
                 strokes: None,
                 material: None,
                 instancers: Vec::new(),
+                fur: None,
                 parent: None,
                 link: None,
                 own_level: None,

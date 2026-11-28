@@ -5834,6 +5834,10 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         });
     }
     if !modeling {
+        let has_fur = ed.scene.try_active().is_some_and(|piece| piece.fur.is_some());
+        widgets::section(ui, "Fur coat", "Grow short strands that follow the surface of this piece.", has_fur, |ui| {
+            crate::fur::section(ui, ed, busy)
+        });
         let brush_title = format!("{} brush", ed.brush_kind.label());
         widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
         if !focus {

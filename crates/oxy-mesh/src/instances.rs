@@ -303,6 +303,8 @@ pub struct ScatterOpts<'a> {
     pub group: Option<(&'a [u32], u32)>,
 }
 
+pub(crate) const MAX_SCATTER_ROOTS: usize = 20_000;
+
 /// A bounded, area-weighted dart throw over visible triangles. A spatial
 /// grid rejects candidates closer than the requested scene-space spacing.
 /// When `opts.mask` or `opts.group` is set, only matching triangles are sampled.
@@ -312,11 +314,20 @@ pub fn scatter_anchors(
     hidden: &[bool],
     opts: ScatterOpts<'_>,
 ) -> Vec<Anchor> {
+    scatter_surface(positions, triangles, hidden, opts, |_, anchor| anchor)
+}
+
+pub(crate) fn scatter_surface<T>(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    hidden: &[bool],
+    opts: ScatterOpts<'_>,
+    mut at_root: impl FnMut(u32, Anchor) -> T,
+) -> Vec<T> {
     let ScatterOpts { spacing, seed, orient, mask, group } = opts;
     if !spacing.is_finite() || spacing <= 0.0 {
         return Vec::new();
     }
-    const MAX_COPIES: usize = 20_000;
     const MAX_ATTEMPTS: u32 = 200_000;
     let mut area = 0.0_f64;
     let mut faces = Vec::new();
@@ -339,18 +350,19 @@ pub fn scatter_anchors(
         let face_area = (b - a).cross(c - a).length() as f64 * 0.5;
         if face_area > 0.0 && face_area.is_finite() {
             area += face_area;
-            faces.push((area, tri));
+            faces.push((area, ti));
         }
     }
     let Some(&(_, first)) = faces.first() else { return Vec::new() };
-    let origin = positions[first[0] as usize];
+    let origin = positions[triangles[first][0] as usize];
     let attempts = (24.0 * area / (spacing as f64).powi(2)).ceil().clamp(64.0, MAX_ATTEMPTS as f64) as u32;
     let min_distance = spacing * spacing;
     let mut grid: HashMap<IVec3, Vec<Vec3>> = HashMap::new();
     let mut anchors = Vec::new();
     for k in 0..attempts {
         let face = faces.partition_point(|(end, _)| *end <= area * random(seed, k, 0) as f64);
-        let tri = faces[face].1;
+        let triangle = faces[face].1;
+        let tri = triangles[triangle];
         let [a, b, c] = tri.map(|i| positions[i as usize]);
         let u = random(seed, k, 1).sqrt();
         let v = random(seed, k, 2);
@@ -382,8 +394,9 @@ pub fn scatter_anchors(
         } else {
             [tri[0], tri[1]]
         };
-        anchors.push(Anchor { points: [tri[0], tri[1], tri[2], tri[0]], weights, edge, key: k });
-        if anchors.len() == MAX_COPIES {
+        anchors
+            .push(at_root(triangle as u32, Anchor { points: [tri[0], tri[1], tri[2], tri[0]], weights, edge, key: k }));
+        if anchors.len() == MAX_SCATTER_ROOTS {
             break;
         }
     }
@@ -391,7 +404,7 @@ pub fn scatter_anchors(
 }
 
 /// A number in 0..1 for (`seed`, `key`, `salt`): the same every time.
-fn random(seed: u32, key: u32, salt: u32) -> f32 {
+pub(crate) fn random(seed: u32, key: u32, salt: u32) -> f32 {
     let mut x = (seed as u64) << 32 ^ (key as u64) ^ ((salt as u64) << 56);
     // SplitMix64.
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
