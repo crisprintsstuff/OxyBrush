@@ -51,6 +51,7 @@ pub enum MenuId {
     CustomMatcap(usize),
     /// The Shading window: the sliders of View > Shading and Inactive pieces.
     ShadingWindow,
+    MaterialsPanel,
     ReferencesWindow,
     Xray,
     XrayScope(oxy_render::XrayScope),
@@ -535,6 +536,7 @@ fn view_menu(ed: &Editor) -> Vec<Node> {
                 check(MenuId::HideCursorInStroke, "Hide circle during stroke", ed.hide_cursor_during_stroke),
             ],
         ),
+        item(MenuId::MaterialsPanel, "Materials panel…"),
         sub("Material", material),
         Node::Separator,
         cmd(Cmd::ThemeWindow, "Theme…"),
@@ -653,6 +655,7 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
         MenuId::XrayScope(scope) => ed.view.xray_scope = scope,
         MenuId::ReferencesWindow => ed.show_references = true,
         MenuId::ShadingWindow => ed.show_shading = true,
+        MenuId::MaterialsPanel => crate::ui::show_materials_panel(ctx, ed),
         MenuId::RecipeBox => ed.show_parts_bin = !ed.show_parts_bin,
         MenuId::Plugin(i, k) => ed.run_wasm_plugin(i, k),
         MenuId::StopPlugin(i) => ed.stop_wasm_plugin(i),

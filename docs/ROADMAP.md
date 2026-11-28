@@ -26,6 +26,7 @@
 | **Next** | Phase 3 leftovers — stencils (3.3), SIMD kernels and culling for 10M triangles (3.6), iPad (3.8–3.10). Phase 4 — incremental dynamic detail, materials per region, and more projection options |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
 | **Viewport screenshots** | [RFC 0060](rfcs/0060-screenshot-export.md) adds viewport and full-window capture in PNG, JPEG, and WebP. |
+| **Selection and cutting** | A persistent shelf picker exposes masking, visibility, and cutter shapes. Shaped Line Split strokes reveal their new face group. [#654](https://github.com/crisprintsstuff/OxyBrush/issues/654) |
 | **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
 
 Legend: ✅ done · 🚧 in progress · ⏳ planned · 🔬 research

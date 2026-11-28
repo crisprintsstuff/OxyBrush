@@ -58,7 +58,7 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 2. **Retopology Contour.** Drag two cuts across a closed limb and look for a quad strip. Choose **New strip** before cutting a second limb.
 3. **Layers and subdivision.** Add sculpt and paint strokes at a fine level. Switch to a lower level and adjust the layer strength. Go back up and check that the detail follows. Save and reopen before checking the controls again.
 4. **Alphas and Stamp.** Load a JPEG, TIFF, WebP, or PSD composite into Alpha and rotate its preview. Try a directional alpha and Roll with changing pressure. Drag a large Scene Project stamp over a busy scene to check preview responsiveness.
-5. **Viewport and selection.** Sculpt and orbit in both panes of Split view. In Poly Edit, check Box, Lasso, and Ellipse outlines. With the brush shelf at the bottom, hold Ctrl and Ctrl+Shift to check the shape columns.
+5. **Viewport and selection.** Sculpt and orbit in both panes of Split view. In Poly Edit, check Box, Lasso, and Ellipse outlines. Pick shapes from the Selection tile on the brush shelf. Verify that Ctrl and Ctrl+Shift leave the brushes in place on the side and bottom shelves. With Wireframe on and face group colors off, apply a shaped Line Split and check that the new group is visible.
 
 ## OxySpheres regeneration and earlier regressions
 

@@ -895,36 +895,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
                 });
                 if ui.button("Materials panel…").clicked() {
-                    show_materials_panel(ui, ed);
+                    show_materials_panel(ui.ctx(), ed);
                     ui.close();
                 }
-                tips::menu(ui, "Material", "Matcaps and transmissive viewport materials", |ui| {
-                    quick_material_target(ui, ed);
-                    lit_material_controls(ui, ed);
-                    for m in MatcapPreset::ALL {
-                        let resp = tips::hover(ui.radio(ed.is_chosen_matcap(m), m.label()), tips::matcap_tip(m));
-                        if resp.hovered() {
-                            ed.preview_choice(m);
-                        }
-                        if resp.clicked() {
-                            ed.choose_matcap(m);
-                        }
-                    }
-                    for i in 0..ed.custom_matcaps.len() {
-                        let name = ed.custom_matcaps[i].name.clone();
-                        let tip = format!("{name}. A material you loaded.");
-                        let resp = tips::hover(ui.radio(ed.is_chosen_custom_matcap(i), name), tip);
-                        if resp.hovered() {
-                            ed.preview_custom_choice(i);
-                        }
-                        if resp.clicked() {
-                            ed.choose_custom_matcap(i);
-                        }
-                    }
-                    if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
-                        ed.request_load_matcap = true;
-                    }
-                });
+                view_material_menu(ui, ed);
                 ui.separator();
                 if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
                     ed.open_theme(crate::editor::ThemeTab::Themes);
@@ -978,7 +952,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         if ed.poly_edit.is_some() {
                             ui.vertical(|ui| poly_mode_buttons(ui, ed));
                         }
-                        selection_shape_buttons(ui, ed);
+                        selection_picker(ui, ed);
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
                         }
@@ -1003,7 +977,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ui.add_space(6.0);
                     current_tiles(ui, ed);
                     poly_mode_buttons(ui, ed);
-                    selection_shape_buttons(ui, ed);
+                    selection_picker(ui, ed);
                     ui.add_space(4.0);
                     if ed.layout == UiLayout::Touch {
                         // Always visible: there are no modifier keys on a tablet.
@@ -3736,56 +3710,68 @@ fn selection_shapes() -> [(crate::editor::SelectShape, &'static str); 5] {
     ]
 }
 
-fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
-    // Shown while masking (Ctrl) or while a cut brush is active so the
-    // same shapes can act as cutters (#492). L also cycles them.
-    let cut_brush = ed.brush_kind.is_curve_cut();
-    if (!ed.brush_roles().ctrl && !cut_brush) || ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() {
-        return;
-    }
-    use crate::editor::CutterShape;
-    let shapes = selection_shapes();
-    let mut buttons = |ui: &mut Ui, shapes: &[(crate::editor::SelectShape, &str)], line: bool| {
-        if line
-            && widgets::icon_button(
-                ui,
-                Icon::CutLine,
-                ed.cut_shape == CutterShape::Line,
-                true,
-                "Line: Drag a straight cutting line. Hold Alt to flip the side.",
-            )
-            .clicked()
-        {
-            ed.cut_shape = CutterShape::Line;
-            ed.select_curve = None;
-        }
-        for &(shape, description) in shapes {
-            let tip = format!("{}: {description}", shape.label());
-            let selected =
-                if cut_brush { ed.cut_shape == CutterShape::Shape(shape) } else { ed.selection_shape == shape };
-            if widgets::icon_button(ui, Icon::Selection(shape), selected, true, &tip).clicked() {
-                if cut_brush {
-                    ed.cut_shape = CutterShape::Shape(shape);
-                } else {
-                    ed.selection_shape = shape;
-                }
-                ed.select_curve = None;
-            }
-        }
-    };
-    if ed.shelf == ShelfPosition::Bottom {
-        // Three full-sized buttons fit the height of the bottom shelf,
-        // including in Touch. Fill down before starting the next column.
-        let split = 3 - usize::from(cut_brush);
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| buttons(ui, &shapes[..split], cut_brush));
-            ui.vertical(|ui| buttons(ui, &shapes[split..], false));
-        });
-    } else if ed.narrow_shelf {
-        ui.vertical_centered(|ui| buttons(ui, &shapes, cut_brush));
+fn selection_picker(ui: &mut Ui, ed: &mut Editor) {
+    if ed.narrow_shelf && ed.shelf != ShelfPosition::Bottom {
+        ui.vertical_centered(|ui| selection_tile(ui, ed));
     } else {
-        ui.horizontal_wrapped(|ui| buttons(ui, &shapes, cut_brush));
+        selection_tile(ui, ed);
     }
+}
+
+const SELECTION_PICKER_TIP: &str = "Selection shape for masking, visibility, or the active cutter";
+
+fn selection_tile(ui: &mut Ui, ed: &mut Editor) {
+    use crate::editor::CutterShape;
+    let cutter = ed.brush_kind.is_curve_cut();
+    // Modifier keys choose the gesture without changing the shelf layout.
+    let active = if cutter { ed.cut_shape } else { CutterShape::Shape(ed.selection_shape) };
+    let (icon, label) = match active {
+        CutterShape::Line => (Icon::CutLine, "Line"),
+        CutterShape::Shape(shape) => (Icon::Selection(shape), shape.label()),
+    };
+    let tile = widgets::tile(ui, widgets::TilePreview::Icon(icon), label, SELECTION_PICKER_TIP, CURRENT_TILE);
+    egui::Popup::from_toggle_button_response(&tile).show(|ui| {
+        ui.label(RichText::new(if cutter { "Cutter shape" } else { "Selection" }).strong());
+        let mut picked = None;
+        let mut option = |ui: &mut Ui, shape: CutterShape, icon, label, tip: &str| {
+            // A labeled row presents the icon and text as one click target.
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(136.0, ui.spacing().interact_size.y), egui::Sense::click());
+            let selected = active == shape;
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+            let visuals = ui.style().interact_selectable(&response, selected);
+            ui.painter().rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
+            let icon_rect =
+                egui::Rect::from_center_size(rect.left_center() + egui::vec2(15.0, 0.0), egui::Vec2::splat(16.0));
+            widgets::paint_icon(ui.painter(), icon_rect, icon, visuals.fg_stroke.color);
+            ui.painter().text(
+                rect.left_center() + egui::vec2(29.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::TextStyle::Button.resolve(ui.style()),
+                visuals.fg_stroke.color,
+            );
+            let response = tips::hover(response, tip);
+            if response.clicked() {
+                picked = Some(shape);
+            }
+        };
+        if cutter {
+            option(ui, CutterShape::Line, Icon::CutLine, "Line", "Drag a straight cut. Hold Alt to flip the side.");
+        }
+        for (shape, tip) in selection_shapes() {
+            option(ui, CutterShape::Shape(shape), Icon::Selection(shape), shape.label(), tip);
+        }
+        if let Some(shape) = picked {
+            if cutter {
+                ed.cut_shape = shape;
+            } else if let CutterShape::Shape(selection) = shape {
+                ed.selection_shape = selection;
+            }
+            ed.select_curve = None;
+            ui.close();
+        }
+    });
 }
 
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
@@ -3882,19 +3868,60 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         };
         let r = widgets::tile(ui, preview, &label, plain::MATERIAL_TILE, size);
         egui::Popup::from_toggle_button_response(&r)
-            // Stays open for the Whole scene / piece choice; click outside to close.
+            // Keep the picker open while comparing materials.
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
-                ui.label(RichText::new("Materials").strong());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Materials").strong());
+                    if ui.small_button("Close").clicked() {
+                        ui.close();
+                    }
+                });
                 quick_material_target(ui, ed);
                 lit_material_controls(ui, ed);
                 matcap_swatches(ui, ed, false);
                 if ui.button("Open Materials panel…").clicked() {
-                    show_materials_panel(ui, ed);
+                    show_materials_panel(ui.ctx(), ed);
                     ui.close();
                 }
             });
     });
+}
+
+fn view_material_menu(ui: &mut Ui, ed: &mut Editor) {
+    let height = (ui.ctx().content_rect().height() - 48.0).max(160.0);
+    let config = egui::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    let (response, _) = egui::menu::SubMenuButton::new("Material").config(config).ui(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+            quick_material_target(ui, ed);
+            lit_material_controls(ui, ed);
+            for m in MatcapPreset::ALL {
+                let resp = tips::hover(ui.radio(ed.is_chosen_matcap(m), m.label()), tips::matcap_tip(m));
+                if resp.hovered() {
+                    ed.preview_choice(m);
+                }
+                if resp.clicked() {
+                    ed.choose_matcap(m);
+                }
+            }
+            for i in 0..ed.custom_matcaps.len() {
+                let name = ed.custom_matcaps[i].name.clone();
+                let tip = format!("{name}. A material you loaded.");
+                let resp = tips::hover(ui.radio(ed.is_chosen_custom_matcap(i), name), tip);
+                if resp.hovered() {
+                    ed.preview_custom_choice(i);
+                }
+                if resp.clicked() {
+                    ed.choose_custom_matcap(i);
+                }
+            }
+            if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
+                ed.request_load_matcap = true;
+                ui.close();
+            }
+        });
+    });
+    tips::hover(response, "Matcaps and transmissive viewport materials");
 }
 
 fn matcap_swatches(ui: &mut Ui, ed: &mut Editor, wrap: bool) {
@@ -3950,11 +3977,15 @@ fn matcap_swatches(ui: &mut Ui, ed: &mut Editor, wrap: bool) {
 const MATERIALS_ID: &str = "materials_inspector";
 const REVEAL_MATERIALS: &str = "reveal_materials_inspector";
 
-fn show_materials_panel(ui: &Ui, ed: &mut Editor) {
+pub(crate) fn show_materials_panel(ctx: &egui::Context, ed: &mut Editor) {
+    reveal_materials(ctx, ed, None);
+}
+
+fn reveal_materials(ctx: &egui::Context, ed: &mut Editor, tab: Option<MaterialsTab>) {
     ed.show_panels = true;
     ed.show_inspector = true;
-    ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique(REVEAL_MATERIALS), true));
-    ui.ctx().request_repaint();
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(REVEAL_MATERIALS), tab));
+    ctx.request_repaint();
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3965,9 +3996,8 @@ enum MaterialsTab {
 }
 
 fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    let reveal =
-        ui.ctx().data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(REVEAL_MATERIALS))).unwrap_or(false);
-    if reveal {
+    let reveal = ui.ctx().data_mut(|data| data.remove_temp::<Option<MaterialsTab>>(egui::Id::unique(REVEAL_MATERIALS)));
+    if reveal.is_some() {
         ui.scroll_to_cursor(Some(egui::Align::Center));
     }
     let has_fur = ed.scene.try_active().is_some_and(|piece| piece.fur.is_some());
@@ -3977,7 +4007,7 @@ fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         "Materials",
         "Matcaps, viewport glass and fur coats.",
         has_fur,
-        reveal.then_some(true),
+        reveal.map(|_| true),
         |ui| {
             let id = ui.scope_id().with("materials_tab");
             let default_tab = if has_fur {
@@ -3993,7 +4023,8 @@ fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             } else {
                 MaterialsTab::Matcaps
             };
-            let mut tab = ui.data_mut(|data| data.get_temp::<MaterialsTab>(id)).unwrap_or(default_tab);
+            let mut tab =
+                reveal.flatten().or_else(|| ui.data(|data| data.get_temp::<MaterialsTab>(id))).unwrap_or(default_tab);
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut tab, MaterialsTab::Matcaps, "Matcaps");
                 ui.selectable_value(&mut tab, MaterialsTab::Glass, "Glass");
@@ -4014,6 +4045,7 @@ fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                     ui.label(egui::RichText::new(&piece.name).small().strong());
                     if tab == MaterialsTab::Glass {
                         use_scene_material(ui, ed);
+                        glass_presets(ui, ed);
                         glass_controls(ui, ed);
                     } else {
                         crate::fur::section(ui, ed, busy);
@@ -4120,8 +4152,13 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
 
 fn quick_material_target(ui: &mut Ui, ed: &mut Editor) {
     material_target(ui, ed);
-    if ed.material_for_piece {
-        glass_controls(ui, ed);
+    if ed.material_for_piece && ed.scene.try_active().is_some() {
+        glass_presets(ui, ed);
+        if ui.button("Glass settings…").clicked() {
+            reveal_materials(ui.ctx(), ed, Some(MaterialsTab::Glass));
+            ui.close();
+        }
+        ui.separator();
     }
 }
 
@@ -4136,12 +4173,10 @@ fn use_scene_material(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
+fn glass_presets(ui: &mut Ui, ed: &mut Editor) {
     use oxy_render::GlassMaterial;
 
-    let Some(piece) = ed.scene.try_active() else { return };
-    let piece_id = piece.id;
-    let stored = piece.material.as_deref().and_then(GlassMaterial::from_key);
+    let stored = ed.scene.try_active().and_then(|piece| piece.material.as_deref()).and_then(GlassMaterial::from_key);
     ui.horizontal(|ui| {
         for preset in [GlassMaterial::CLEAR, GlassMaterial::FROSTED] {
             if ui
@@ -4152,6 +4187,14 @@ fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
+}
+
+fn glass_controls(ui: &mut Ui, ed: &mut Editor) {
+    use oxy_render::GlassMaterial;
+
+    let Some(piece) = ed.scene.try_active() else { return };
+    let piece_id = piece.id;
+    let stored = piece.material.as_deref().and_then(GlassMaterial::from_key);
     let Some(stored) = stored else { return };
     let id = egui::Id::unique(("glass_draft", ed.id, piece_id));
     let mut draft = ui
@@ -9867,66 +9910,97 @@ mod tests {
     }
 
     #[test]
-    fn mask_modifier_exposes_direct_selection_shapes() {
-        use crate::editor::SelectShape;
-        let mut ed = Editor::default();
-        ed.show_welcome = false;
-        let ctx = egui::Context::default();
-        let lasso = format!("{}: {}", SelectShape::Lasso.label(), plain::SELECTION_LASSO);
-        assert!(widgets_labelled(&mut ed, &ctx, &lasso).is_empty());
-        for shift in [false, true] {
-            ed.touch_modifiers.ctrl = true;
-            ed.touch_modifiers.shift = shift;
-            ed.selection_shape = SelectShape::Rectangle;
-            let lasso_button = widgets_labelled(&mut ed, &ctx, &lasso)[0].center();
-            click_at(&mut ed, &ctx, lasso_button);
-            assert_eq!(ed.selection_shape, SelectShape::Lasso);
+    fn selection_picker_and_brushes_stay_put_when_modifiers_change() {
+        for shelf in [ShelfPosition::Left, ShelfPosition::Right, ShelfPosition::Bottom] {
+            let mut ed = Editor::default();
+            ed.show_welcome = false;
+            ed.shelf = shelf;
+            let ctx = egui::Context::default();
+            let picker = widgets_labelled(&mut ed, &ctx, SELECTION_PICKER_TIP);
+            let brushes = widgets_labelled(&mut ed, &ctx, "Clay");
+            assert_eq!(picker.len(), 1);
+            assert!(!brushes.is_empty());
+            assert!(widgets_labelled(&mut ed, &ctx, "Lasso").is_empty());
+            ed.modifiers.ctrl = true;
+            for shift in [false, true] {
+                ed.modifiers.shift = shift;
+                assert_eq!(widgets_labelled(&mut ed, &ctx, SELECTION_PICKER_TIP), picker);
+                assert_eq!(widgets_labelled(&mut ed, &ctx, "Clay"), brushes);
+            }
         }
     }
 
     #[test]
-    fn bottom_shelf_shapes_fit_in_vertical_columns() {
-        for layout in UiLayout::ALL {
-            let mut ed = Editor::default();
-            ed.show_welcome = false;
-            ed.shelf = ShelfPosition::Bottom;
-            ed.layout = layout;
-            ed.touch_modifiers.ctrl = true;
-            let ctx = egui::Context::default();
-            test_apply_theme(&ctx, false, 1.0, layout);
-            for (shift, brush) in [(false, BrushKind::Draw), (true, BrushKind::Draw), (false, BrushKind::PlaneClip)] {
-                ed.touch_modifiers.shift = shift;
-                ed.brush_kind = brush;
-                ed.selection_shape = crate::editor::SelectShape::Rectangle;
-                ed.cut_shape = crate::editor::CutterShape::Line;
-                let mut rects = Vec::new();
-                if brush.is_curve_cut() {
-                    rects.extend(widgets_labelled(
-                        &mut ed,
-                        &ctx,
-                        "Line: Drag a straight cutting line. Hold Alt to flip the side.",
-                    ));
-                }
-                for (shape, description) in selection_shapes() {
-                    let label = format!("{}: {description}", shape.label());
-                    let matches = widgets_labelled(&mut ed, &ctx, &label);
-                    assert_eq!(matches.len(), 1, "{layout:?} {label}");
-                    rects.push(matches[0]);
-                }
-                assert!((rects[0].left() - rects[2].left()).abs() < 0.1);
-                assert!(rects[0].bottom() <= rects[1].top() && rects[1].bottom() <= rects[2].top());
-                assert!(rects[0].right() <= rects[3].left());
-                assert!((rects[0].top() - rects[3].top()).abs() < 0.1);
-                assert!(rects.iter().all(|rect| rect.bottom() < 900.0), "{layout:?}: {rects:?}");
+    fn selection_picker_switches_shapes_without_modifiers_and_keeps_line_for_cutters() {
+        use crate::editor::{CutterShape, SelectShape};
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.shelf = ShelfPosition::Bottom;
+        let ctx = egui::Context::default();
+        let tile = widgets_labelled(&mut ed, &ctx, SELECTION_PICKER_TIP)[0].center();
+        click_at(&mut ed, &ctx, tile);
+        assert!(widgets_labelled(&mut ed, &ctx, "Line").is_empty());
+        let lasso = widgets_labelled(&mut ed, &ctx, "Lasso")[0].center();
+        click_at(&mut ed, &ctx, lasso);
+        assert_eq!(ed.selection_shape, SelectShape::Lasso);
+        assert!(widgets_labelled(&mut ed, &ctx, "Lasso").is_empty());
 
-                click_at(&mut ed, &ctx, rects.last().unwrap().center());
-                if brush.is_curve_cut() {
-                    assert_eq!(ed.cut_shape, crate::editor::CutterShape::Shape(crate::editor::SelectShape::Curve));
-                } else {
-                    assert_eq!(ed.selection_shape, crate::editor::SelectShape::Curve);
-                }
-            }
+        ed.brush_kind = BrushKind::LineSplit;
+        click_at(&mut ed, &ctx, tile);
+        assert_eq!(widgets_labelled(&mut ed, &ctx, "Line").len(), 1);
+        let ellipse = widgets_labelled(&mut ed, &ctx, "Ellipse")[0].center();
+        click_at(&mut ed, &ctx, ellipse);
+        assert_eq!(ed.cut_shape, CutterShape::Shape(SelectShape::Ellipse));
+        assert_eq!(ed.selection_shape, SelectShape::Lasso);
+    }
+
+    #[test]
+    fn view_material_menu_stays_open_for_multiple_choices() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        let view = widgets_labelled(&mut ed, &ctx, "View")[0].center();
+        click_at(&mut ed, &ctx, view);
+        let material = widgets_labelled(&mut ed, &ctx, "Material")[0].center();
+        frames_with(&mut ed, &ctx, vec![vec![egui::Event::PointerMoved(material)]]);
+        let bronze = widgets_labelled(&mut ed, &ctx, MatcapPreset::Bronze.label())[0].center();
+        click_at(&mut ed, &ctx, bronze);
+        assert_eq!(ed.matcap, MatcapPreset::Bronze);
+        let jade = widgets_labelled(&mut ed, &ctx, MatcapPreset::Jade.label())[0].center();
+        click_at(&mut ed, &ctx, jade);
+        assert_eq!(ed.matcap, MatcapPreset::Jade);
+        click_at(&mut ed, &ctx, egui::pos2(800.0, 700.0));
+        assert!(widgets_labelled(&mut ed, &ctx, MatcapPreset::Jade.label()).is_empty());
+    }
+
+    #[test]
+    fn shelf_materials_switch_glass_and_open_the_docked_controls() {
+        use oxy_render::GlassMaterial;
+
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.show_inspector = false;
+        ed.material_for_piece = true;
+        let ctx = egui::Context::default();
+        let tile = widgets_labelled(&mut ed, &ctx, plain::MATERIAL_TILE)[0].center();
+        click_at(&mut ed, &ctx, tile);
+        for preset in [GlassMaterial::CLEAR, GlassMaterial::FROSTED, GlassMaterial::CLEAR] {
+            let swatch = widgets_labelled(&mut ed, &ctx, preset.label())[0].center();
+            click_at(&mut ed, &ctx, swatch);
+            assert_eq!(ed.scene.active().material.as_deref(), Some(preset.key().as_str()));
         }
+        let settings = widgets_labelled(&mut ed, &ctx, "Glass settings…")[0].center();
+        click_at(&mut ed, &ctx, settings);
+        assert!(ed.show_inspector);
+        assert!(widgets_labelled(&mut ed, &ctx, "Glass settings…").is_empty());
+        let exit = widgets_labelled(&mut ed, &ctx, "Exit refraction")[0].center();
+        click_at(&mut ed, &ctx, exit);
+        let preview = ed.preview_piece_material.as_deref().and_then(GlassMaterial::from_key).unwrap();
+        assert!(preview.exit_refraction);
+        assert_eq!(ed.scene.active().material.as_deref(), Some(GlassMaterial::CLEAR.key().as_str()));
+        let apply = widgets_labelled(&mut ed, &ctx, "Apply glass settings")[0].center();
+        click_at(&mut ed, &ctx, apply);
+        assert_eq!(ed.scene.active().material.as_deref(), Some(preview.key().as_str()));
     }
 
     #[test]
@@ -10304,14 +10378,12 @@ mod tests {
         let ctx = egui::Context::default();
         test_apply_theme(&ctx, false, 1.0, ed.layout);
         click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
-        // Find the rows from the layout: Draw is the first row, Pinch the seventh.
         let row = |ed: &Editor, k: BrushKind| ed.brush_order.iter().position(|b| *b == k).unwrap();
         assert_eq!(row(&ed, BrushKind::Draw), 0);
-        // Rows are 46 pt tall plus 2 pt spacing; the first starts below the previews.
-        let first = 234.0;
-        let y = |i: usize| first + 48.0 * i as f32;
         // Drag Draw down onto the upper half of the fourth row (Smooth).
-        drag(&mut ed, &ctx, egui::pos2(100.0, y(0)), egui::pos2(100.0, y(3) - 8.0));
+        let draw = widgets_labelled(&mut ed, &ctx, "Draw")[0].center();
+        let smooth = widgets_labelled(&mut ed, &ctx, "Smooth")[0].center();
+        drag(&mut ed, &ctx, draw, smooth - egui::vec2(0.0, 8.0));
         assert_eq!(row(&ed, BrushKind::Draw), 2, "order: {:?}", ed.brush_order);
         assert_eq!(ed.brush_order[0], BrushKind::Clay);
         assert_eq!(ed.number_key(BrushKind::Draw).as_deref(), Some("3"));

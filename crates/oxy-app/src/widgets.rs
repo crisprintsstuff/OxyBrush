@@ -1109,6 +1109,7 @@ pub enum TilePreview<'a> {
     Texture(&'a egui::TextureHandle),
     RotatedTexture(&'a egui::TextureHandle, f32),
     Color(Color32),
+    Icon(Icon),
     Empty,
 }
 
@@ -1145,6 +1146,9 @@ pub fn tile(ui: &mut Ui, preview: TilePreview<'_>, caption: &str, tooltip: &str,
             TilePreview::RotatedTexture(tex, angle) => paint_rotated_texture(ui, tex, img.shrink(4.0), angle),
             TilePreview::Color(color) => {
                 ui.painter().rect_filled(img.shrink(5.0), 4.0, color);
+            }
+            TilePreview::Icon(icon) => {
+                paint_icon(ui.painter(), img.shrink(size * 0.30), icon, v.text_color());
             }
             TilePreview::Empty => {
                 ui.painter().text(

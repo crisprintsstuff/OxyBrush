@@ -5018,7 +5018,7 @@ impl Editor {
             BrushKind::LineSplit => {
                 let mesh = &self.scene.active().mesh;
                 let new_group = mesh.next_free_group();
-                let mut any = false;
+                let mut count = 0;
                 let groups: Vec<u32> = mesh
                     .triangles
                     .iter()
@@ -5029,19 +5029,22 @@ impl Editor {
                         }
                         let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
                         if in_region(c) {
-                            any = true;
+                            count += 1;
                             new_group
                         } else {
                             mesh.groups()[ti]
                         }
                     })
                     .collect();
-                if !any {
+                if count == 0 {
                     self.status = "No faces in that shape".into();
                     return;
                 }
                 self.edit_faces(kind.label(), |m| m.set_groups(groups));
-                self.status = format!("New polygroup for faces {region}");
+                // Shaped splits edit face groups, so the wireframe alone
+                // cannot show the result.
+                self.view.show_groups = true;
+                self.status = format!("Grouped {count} faces {region}");
             }
             BrushKind::CutAway => {
                 let mesh = &self.scene.active().mesh;
@@ -19354,6 +19357,8 @@ Connections: {
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.brush_kind = BrushKind::LineSplit;
         e.cut_shape = CutterShape::Shape(SelectShape::Circle);
+        e.view.wireframe = true;
+        e.view.show_groups = false;
         let orig_tcount = e.scene.active().mesh.triangle_count();
         let orig_groups = e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>();
         assert_eq!(orig_groups.len(), 1);
@@ -19368,6 +19373,8 @@ Connections: {
         assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount, "Line Split shape keeps topology");
         let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
         assert!(groups.len() >= 2, "faces inside the circle get a new polygroup");
+        assert!(e.view.wireframe && e.view.show_groups, "the new group is visible in a wireframe-only view");
+        assert!(e.status.contains("Grouped"), "{}", e.status);
 
         e.undo();
         assert_eq!(e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>().len(), 1);
