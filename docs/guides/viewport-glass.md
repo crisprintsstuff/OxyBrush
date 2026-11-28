@@ -3,8 +3,9 @@
 1. Select the piece you want to turn into glass.
 2. Open **Materials > Glass** in the right inspector and pick **Clear Glass**
    or **Frosted Glass**. **View > Materials panel…** opens the inspector for you.
-   The material tile above the brush shelf still offers these presets when
-   you choose the active piece as the target.
+   The material tile above the brush shelf offers both presets when you
+   choose the active piece as the target. Switch presets in the open picker
+   and choose **Glass settings…** to move the controls to the inspector.
 3. Preview changes in the viewport. Click **Apply glass settings** to save
    them to the piece in one Undo step. The project keeps them when you reopen it.
 
@@ -23,4 +24,7 @@ better and the clear sphere bends it like a lens. The frosted sphere shows
 the same background with softer edges. A closed shell gives the most
 reliable result. If the viewport can't find an exit, it uses the entry
 surface alone. Glass uses visible opaque pieces and reference images as its
-backdrop. Details near a viewport edge can shift as you orbit.
+backdrop. Zoom and orbit change the view through the glass. The viewport
+samples the visible part of the backdrop each frame, so the effect can shift
+as details pass out of view, especially near the edges. The piece keeps
+the same IOR, roughness, and tint as you change the view.

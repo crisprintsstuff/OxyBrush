@@ -11,6 +11,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 - **Screenshot export.** Save the current viewport or the full OxyBrush window as PNG, JPEG, or WebP from **File > Export screenshot…**. [RFC 0060](docs/rfcs/0060-screenshot-export.md)
 
+### Changed
+
+- The brush shelf has a dedicated Selection picker for masking, visibility, and cutter shapes. The shelf stays in place when you hold Ctrl or Ctrl+Shift.
+
+### Fixed
+
+- Line Split reveals the new face group after a successful rectangle, lasso, circle, ellipse, or Curve stroke. [#654](https://github.com/crisprintsstuff/OxyBrush/issues/654)
+- The shelf material picker stays open when switching between Clear Glass and Frosted Glass. **Glass settings…** opens the controls in the right inspector for live adjustments with the viewport clear of menus.
+- **View > Material** stays open when choosing matcaps. On macOS, **View > Materials panel…** opens the docked inspector for repeated comparisons.
+
 ## [4.2.0] - 2026-11-28
 
 ### Added
