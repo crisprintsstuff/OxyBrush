@@ -351,6 +351,7 @@ pub struct Settings {
     pub matcap: MatcapPreset,
     pub shelf: ShelfPosition,
     pub panels: PanelSide,
+    pub menu_docks: crate::menu_dock::MenuDocks,
     pub quick_bar: QuickBar,
     /// Brush order in the shelf; number keys 1–9, 0 follow it.
     pub brush_order: Vec<BrushKind>,
@@ -1154,6 +1155,7 @@ impl Default for Settings {
             matcap: MatcapPreset::Terracotta,
             shelf: ShelfPosition::Left,
             panels: PanelSide::Right,
+            menu_docks: Default::default(),
             quick_bar: QuickBar::ViewportTop,
             brush_order: BrushKind::ALL.to_vec(),
             favorite_brushes: Vec::new(),
@@ -1448,6 +1450,18 @@ impl Settings {
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &format!("settings_panel = {}\n", self.settings_panel)
+            + &PanelSide::ALL
+                .iter()
+                .map(|side| {
+                    let menus = crate::menu_dock::DockMenu::ALL
+                        .iter()
+                        .filter(|&&menu| self.menu_docks[menu as usize] == Some(*side))
+                        .map(|menu| menu.label())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("dock_{} = {menus}\n", side.key())
+                })
+                .collect::<String>()
             + &format!("inspector_width = {:.0}\n", self.inspector_width)
             + &format!("recipe_box = {}\n", self.recipe_box)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
@@ -1834,6 +1848,14 @@ impl Settings {
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
                 "settings_panel" => s.settings_panel = v.parse().unwrap_or(s.settings_panel),
+                "dock_left" | "dock_right" => {
+                    let side = if k == "dock_left" { PanelSide::Left } else { PanelSide::Right };
+                    for menu in crate::menu_dock::DockMenu::ALL {
+                        if v.split(',').any(|name| name.trim() == menu.label()) {
+                            s.menu_docks[menu as usize] = Some(side);
+                        }
+                    }
+                }
                 "inspector_width" => {
                     if let Ok(x) = v.parse::<f32>()
                         && (0.0..=800.0).contains(&x)
@@ -2081,6 +2103,7 @@ mod tests {
             matcap: MatcapPreset::Jade,
             shelf: ShelfPosition::Bottom,
             panels: PanelSide::Left,
+            menu_docks: [Some(PanelSide::Right), None, None, None, None, Some(PanelSide::Left), None],
             quick_bar: QuickBar::ViewportBottom,
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
             favorite_brushes: vec![BrushKind::Clay, BrushKind::Draw],

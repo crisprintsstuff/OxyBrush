@@ -1476,6 +1476,7 @@ pub struct Editor {
     /// Where the brush shelf, the settings panel and the size/strength bar go.
     pub shelf: crate::settings::ShelfPosition,
     pub panels: crate::settings::PanelSide,
+    pub menu_docks: crate::menu_dock::MenuDocks,
     pub quick_bar: crate::settings::QuickBar,
     /// Brush order in the shelf (user-arranged); number keys follow it.
     pub brush_order: Vec<BrushKind>,
@@ -1851,6 +1852,7 @@ impl Default for Editor {
             request_import_part: false,
             shelf: Default::default(),
             panels: Default::default(),
+            menu_docks: Default::default(),
             quick_bar: Default::default(),
             brush_order: BrushKind::ALL.to_vec(),
             favorite_brushes: Vec::new(),
@@ -2290,6 +2292,7 @@ impl Editor {
             matcap: self.matcap,
             shelf: self.shelf,
             panels: self.panels,
+            menu_docks: self.menu_docks,
             quick_bar: self.quick_bar,
             brush_order: self.brush_order.clone(),
             favorite_brushes: self.favorite_brushes.clone(),
@@ -2617,6 +2620,7 @@ impl Editor {
         self.matcap = s.matcap;
         self.shelf = s.shelf;
         self.panels = s.panels;
+        self.menu_docks = s.menu_docks;
         self.quick_bar = s.quick_bar;
         self.brush_order = s.brush_order.clone();
         self.favorite_brushes = s.favorite_brushes.clone();
