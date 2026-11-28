@@ -11,6 +11,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Fixed
 
 - **Plane Clip** follows the drawn Curve or closed shape, preserving depth as it moves vertices to the cutter boundary. [#638](https://github.com/crisprintsstuff/OxyBrush/issues/638)
+- **OxySpheres quad base mesh** retries crowded three-way joints with narrower sockets while keeping the armature intact.
 
 ### Changed
 

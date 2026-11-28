@@ -84,7 +84,9 @@ width. Narrow sockets when short links need extra clearance. Move the collars
 outward as needed until each is a separate face of
 the junction hull. Reserve part of each link for the limb strip, including
 when it leads directly to another junction. Keep the existing three-way
-collar placement for older cages.
+collar placement when it fits. If the wider collars overlap on a three-way
+joint, discard those rings and retry with the same socket fitter used for
+larger junctions. The retry uses the original armature and settings.
 
 Measure fit against the planes of the proposed collars. A small set of
 points inside those planes supports the bulk of the palm or heel as the cage

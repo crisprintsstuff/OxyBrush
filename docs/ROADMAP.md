@@ -116,6 +116,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - [OxySpheres quad base mesh](rfcs/0038-oxyspheres-quad-base-mesh.md)
   builds an experimental cage for chains and connected joints with up to
   six links each. Resolution, Blend, and up to two subdivision levels are available.
+  Tight three-way junctions can retry with narrower sockets.
 
 - ✅ [Poly Edit box and lasso selection](rfcs/0035-poly-edit-area-selection.md)
   for visible faces, edges, and points (#299).
