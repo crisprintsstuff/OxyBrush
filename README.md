@@ -15,7 +15,7 @@
 
 
 <p align="center">
-  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.4"><b>Download</b></a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.2.0"><b>Download</b></a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
   <a href="https://discord.gg/Vfm7Km7xvG"><b>Discord</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Stable:** OxyBrush **4.1.4** adds quad hands and feet with up to six links per OxySpheres joint, plus an import inspector with undoable face repairs and hole filling. [4.1.4 release notes](docs/releases/v4.1.4.md)
+> **Stable:** OxyBrush **4.2.0** adds OxyMorph (Beta) for sculpting and blending variants, plus Clear Glass and Frosted Glass viewport materials. [4.2.0 release notes](docs/releases/v4.2.0.md)
 
 **Highlights**
 
@@ -45,7 +45,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 ## Download and install
 
-Get **[OxyBrush v4.1.4](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.4)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
+Get **[OxyBrush v4.2.0](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.2.0)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
 
 | Platform | File | How |
 |---|---|---|
@@ -169,7 +169,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 - **Split view:** View > Split view shows two viewports side by side or stacked, each with its own camera. Click a pane to sculpt or orbit there; drag the divider to resize ([RFC 0054](docs/rfcs/0054-split-view.md)).
 - **Vertex color:** a Paint brush (Shift blends vertex colors; Alt erases; works with alphas and symmetry). Strength sets how opaque each stroke is, without overlapping dabs stacking past that value. Open **Color Jitter** in the Paint settings to vary hue, saturation, and value per stroke or per dab. Sculpt brushes can turn on **Also paint** to lay that color under each dab while they move the surface. **RGB Strength** sets the color opacity independently ([RFC 0052](docs/rfcs/0052-also-paint.md)). There are also fills for the whole piece, its cavities or its peaks, all respecting the mask. **Color Filter…** (Tools > Vertex color) adjusts Fill, Hue, Saturation, Value, Brightness, Contrast, Smooth and RGB across the piece with live drag bars. Color is kept through subdivision, remesh, booleans and decimate, and exported in glTF/GLB, PLY and OBJ.
-- **Glass viewport materials.** In Materials, target the active piece and pick Clear Glass or Frosted Glass. Adjust tint, roughness, and refraction, or reseed the procedural frost. Raise Absorption with a colored tint for deeper color in thicker areas of closed pieces. Enable Exit refraction on closed pieces to bend light at both surfaces. Settings are saved with the piece. [RFC 0058](docs/rfcs/0058-transmissive-materials.md)
+- **Glass viewport materials.** In Materials, target the active piece and pick Clear Glass or Frosted Glass. Adjust tint, roughness, and refraction, or reseed the procedural frost. Raise Absorption with a colored tint for deeper color in thicker areas of closed pieces. Enable Exit refraction on closed pieces to bend light at both surfaces. Settings are saved with the piece. [Glass materials guide](docs/guides/viewport-glass.md) · [RFC 0058](docs/rfcs/0058-transmissive-materials.md)
 - **Materials:** six built-in matcaps, or load your own (PNG or JPEG), previewed live as you hover. Give a piece **its own material** (For: *piece* only, in the material picker) to tell parts apart; it's saved with the project. **Ambient occlusion and cavity shading** make folds and pores read clearly; **flat shading** shows every polygon. **Hard edge angle** (View > Shading) sets how sharp a corner must be before those faces shade flat (40° by default; 180°, shown as Off, keeps every edge smooth). It only changes the view and is remembered.
 - **Pieces:** focus a row and press Up or Down to step through the list. **Show Only** follows the active piece and restores the prior visibility when switched off. The Keymap editor can bind **Grow visible** and **Shrink visible**.
 - **Grid:** the viewport grid faces the camera in snapped front, side, and top orthographic views.
@@ -273,7 +273,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.1.4 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.2.0 |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, rebuild lower level ✅, touch layout ✅, performance first pass ✅ · 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, deform window ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅, sculpt and paint layers ✅ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
