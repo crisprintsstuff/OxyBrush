@@ -14878,7 +14878,15 @@ mod tests {
         use oxy_render::GlassMaterial;
 
         let mut e = editor();
-        let glass = GlassMaterial { tint: [220, 240, 255], ior: 1.62, frost_seed: Some(42), ..GlassMaterial::FROSTED };
+        let glass = GlassMaterial {
+            tint: [220, 240, 255],
+            ior: 1.62,
+            frost_seed: Some(42),
+            absorption: 1.25,
+            ..GlassMaterial::FROSTED
+        };
+        let preset = GlassMaterial::FROSTED.key();
+        e.set_piece_material(Some(preset.clone()));
         let key = glass.key();
         e.set_piece_material(Some(key.clone()));
         assert!(e.is_modified());
@@ -14886,7 +14894,10 @@ mod tests {
         let saved = format::decode(&format::encode(&e.scene_data())).unwrap();
         assert_eq!(saved.pieces[0].material.as_deref().and_then(GlassMaterial::from_key), Some(glass));
         e.undo();
+        assert_eq!(e.scene.active().material.as_deref(), Some(preset.as_str()));
+        e.undo();
         assert!(e.scene.active().material.is_none());
+        e.redo();
         e.redo();
         assert_eq!(e.scene.active().material.as_deref(), Some(key.as_str()));
         e.set_piece_material(None);
