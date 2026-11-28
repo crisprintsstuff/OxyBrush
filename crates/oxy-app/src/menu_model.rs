@@ -212,8 +212,8 @@ fn edit_menu(ed: &Editor) -> Vec<Node> {
     let reopen = ed.can_reopen_last_stroke();
     let replay = ed.can_replay_last_stroke();
     let mut v = vec![
-        cmd_on(Cmd::Undo, "Undo", undo),
-        cmd_on(Cmd::Redo, "Redo", redo),
+        cmd_on(Cmd::Undo, "Undo", ed.can_undo()),
+        cmd_on(Cmd::Redo, "Redo", ed.can_redo()),
         Node::Separator,
         cmd_on(Cmd::CopyPiece, "Copy piece", !ed.scene.pieces.is_empty()),
         cmd_on(Cmd::PastePiece, "Paste piece", !ed.piece_clipboard.is_empty()),
@@ -403,7 +403,7 @@ fn tools_menu(ed: &Editor, busy: bool) -> Vec<Node> {
     vec![
         cmd(Cmd::DeformWindow, "Deform…"),
         cmd(Cmd::SurfaceNoiseWindow, "Surface Noise…"),
-        cmd(Cmd::OxyMorph, "OxyMorph…"),
+        cmd(Cmd::OxyMorph, "OxyMorph (Beta)…"),
         cmd(Cmd::ScaleCoverWindow, "Scale cover…"),
         sub("Transform", gizmo),
         sub("Symmetrize", symmetrize),

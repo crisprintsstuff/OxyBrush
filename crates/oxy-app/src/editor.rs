@@ -2083,6 +2083,7 @@ impl Editor {
     /// Apply a split layout. Enabling split seeds the other pane from the
     /// current camera when it still matches (first time).
     pub fn set_split(&mut self, layout: crate::split_view::SplitLayout) {
+        self.oxymorph_set_compare(false);
         if layout.is_split() && !self.split.is_split() {
             // Fresh split: other pane starts as a useful orthographic front.
             let doc = &mut self.documents[self.active_document];
@@ -2104,6 +2105,10 @@ impl Editor {
 
     /// Keep [`Self::canvas`] equal to the active pane inside [`Self::canvas_full`].
     pub fn apply_pane_canvas(&mut self) {
+        if let Some((pane, _)) = self.oxymorph_comparison() {
+            self.canvas = pane.rect(self.canvas_full);
+            return;
+        }
         if !self.split.is_split() {
             self.canvas = self.canvas_full;
             return;
@@ -2814,6 +2819,9 @@ impl Editor {
     pub(crate) fn orbit_point_under(&self, pixel: Vec2) -> Option<Vec3> {
         let size = self.canvas_size();
         let (o, d) = self.camera.ray(self.canvas_local(pixel), size);
+        if self.oxymorph_comparison().is_some() {
+            return self.oxymorph_compare_hit(o, d).map(|hit| hit.point);
+        }
         if let Some((_, hit)) = self.pick_piece(o, d) {
             return Some(o + d * hit.t);
         }
@@ -2846,6 +2854,10 @@ impl Editor {
 
     /// Nearest visible piece under a ray: (index, hit).
     fn pick_piece(&self, o: Vec3, d: Vec3) -> Option<(usize, oxy_mesh::RayHit)> {
+        if let Some((pane, pair)) = self.oxymorph_comparison() {
+            let index = self.scene.index_of(pane.source(pair)?)?;
+            return self.scene.pieces[index].mesh.raycast(o, d).map(|hit| (index, hit));
+        }
         self.scene
             .pieces
             .iter()
@@ -2872,7 +2884,15 @@ impl Editor {
         if matches!(self.drag, Drag::OxyMorphPaint) {
             self.pointer_up();
         }
-        if self.split.is_split() {
+        let comparison = self.oxymorph_comparison().is_some();
+        if comparison {
+            let Some(pane) = crate::oxymorph::ComparePane::at(self.canvas_full, p) else { return };
+            // Finish any old stroke before a press can select a different piece.
+            if !matches!(self.drag, Drag::None) {
+                self.pointer_up();
+            }
+            self.oxymorph_focus(pane);
+        } else if self.split.is_split() {
             if button == PointerButton::Primary
                 && crate::split_view::on_divider(self.split, self.canvas_full, self.split_ratio, p)
             {
@@ -2901,7 +2921,7 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
-        if self.oxymorph_preview_pair().is_some() {
+        if self.oxymorph_mix_focused() {
             let action = self.keymap.nav_action(NavButton::Left, self.active_modifiers());
             self.drag = if action.is_none() && self.oxymorph_paint_start(p) {
                 Drag::OxyMorphPaint
@@ -2942,7 +2962,7 @@ impl Editor {
             self.drag = Drag::LightHandle(h);
             return;
         }
-        if self.tube_pointer_down(p) {
+        if !comparison && self.tube_pointer_down(p) {
             return;
         }
         // Nothing to sculpt: a press orbits (or pans, if the keymap says so).
@@ -2955,6 +2975,17 @@ impl Editor {
             return;
         }
         let (kind, _invert) = self.effective_brush();
+        if comparison
+            && (kind.is_curve_cut()
+                || matches!(kind, BrushKind::InsertPrimitive | BrushKind::Tube | BrushKind::CurveMove))
+        {
+            self.status = "Turn off OxyMorph comparison to use this tool".into();
+            self.drag = self.drag_for_nav(
+                Some(self.keymap.nav_action(NavButton::Left, self.active_modifiers()).unwrap_or(NavAction::Orbit)),
+                button,
+            );
+            return;
+        }
         if kind.is_curve_cut() {
             if self.job_blocks_active() {
                 let label = self.job.as_ref().map_or(String::new(), |j| j.label.clone());
@@ -2976,7 +3007,8 @@ impl Editor {
         let m = self.brush_roles();
 
         let active = self.scene.active_index();
-        let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
+        let active_visible = comparison || self.scene.active().visible;
+        let active_hit = active_visible.then(|| self.scene.active().mesh.raycast(o, d)).flatten();
 
         // When Gizmo is active, Ctrl+click on the active mesh snaps the gizmo pivot
         // to the hit point and aligns its primary axis to the surface normal.
@@ -3001,6 +3033,10 @@ impl Editor {
 
         // A curve selection starts with a click (see `select_curve_click`).
         if m.ctrl && self.selection_shape == SelectShape::Curve {
+            if comparison {
+                self.status = "Choose a different selection shape or turn off OxyMorph comparison".into();
+                return;
+            }
             let action = match (m.shift, m.alt) {
                 (true, false) => SelectAction::ShowOnly,
                 (true, true) => SelectAction::Hide,
@@ -3093,7 +3129,7 @@ impl Editor {
             self.drag = self.drag_for_nav(Some(action), PointerButton::Primary);
         } else if self.keymap.mask_empty == keymap::MaskEmpty::Box && m.alt {
             self.drag = Drag::Pan;
-        } else if self.stroke_from_empty && self.scene.active().visible && !self.job_blocks_active() {
+        } else if self.stroke_from_empty && active_visible && !self.job_blocks_active() {
             // The stroke starts once the pointer reaches the model.
             self.drag = Drag::PendingStroke;
         } else {
@@ -3149,8 +3185,14 @@ impl Editor {
         } else {
             self.stroke_mode
         };
+        let comparison = self.oxymorph_comparison().is_some();
         if mode == StrokeMode::Curve {
-            self.drag = Drag::CurveDraw { kind, invert, points: vec![p] };
+            if comparison {
+                self.status = "Choose Freehand, Line or Stamp to sculpt in OxyMorph comparison".into();
+                self.drag = Drag::Orbit;
+            } else {
+                self.drag = Drag::CurveDraw { kind, invert, points: vec![p] };
+            }
             return;
         }
         if mode != StrokeMode::Freehand {
@@ -3200,6 +3242,7 @@ impl Editor {
         // pointer is held still. (Not with dynamic detail: the stroke can't
         // be taken back once the mesh has been rebuilt under it.)
         let curve_capable = self.stroke_mode == StrokeMode::Freehand
+            && !comparison
             && !(kind.is_grab_like()
                 || kind == BrushKind::SnakeHook
                 || kind == BrushKind::Smooth
@@ -3246,6 +3289,10 @@ impl Editor {
             || kind.is_curve_cut()
             || matches!(kind, BrushKind::Mask | BrushKind::Paint | BrushKind::InsertPrimitive | BrushKind::CurveMove));
         if !sculpts {
+            return false;
+        }
+        if self.oxymorph_comparison().is_some() {
+            self.status = "Dynamic detail is paused in OxyMorph comparison to keep the variants matched".into();
             return false;
         }
         let piece = self.scene.active();
@@ -5359,16 +5406,13 @@ impl Editor {
         }
         let size = self.canvas_size();
         let (o, d) = self.camera.ray(size * 0.5, size);
-        let hit = self
-            .scene
-            .pieces
-            .iter()
-            .filter(|p| p.visible)
-            .filter_map(|p| p.mesh.raycast(o, d))
-            .map(|h| h.point)
-            .min_by(|a, b| (*a - o).length_squared().total_cmp(&(*b - o).length_squared()));
-        if let Some(point) = hit {
-            let depth = (point - self.camera.eye()).dot(self.camera.forward());
+        let hit = if self.oxymorph_comparison().is_some() {
+            self.oxymorph_compare_hit(o, d)
+        } else {
+            self.pick_piece(o, d).map(|(_, hit)| hit)
+        };
+        if let Some(hit) = hit {
+            let depth = (hit.point - self.camera.eye()).dot(self.camera.forward());
             let gap = self.camera.distance - depth;
             if gap > 0.0 && next_distance < 2.0 * gap {
                 self.camera.anchor_at_depth(depth);
@@ -5390,7 +5434,8 @@ impl Editor {
             self.spheres_undo();
             return;
         }
-        if self.oxymorph_history_step(false) {
+        if self.oxymorph_mix_focused() {
+            self.oxymorph_history_step(false);
             return;
         }
         if self.undo_per_piece { self.undo_piece() } else { self.undo_scene() }
@@ -5406,7 +5451,8 @@ impl Editor {
             self.spheres_redo();
             return;
         }
-        if self.oxymorph_history_step(true) {
+        if self.oxymorph_mix_focused() {
+            self.oxymorph_history_step(true);
             return;
         }
         if self.undo_per_piece { self.redo_piece() } else { self.redo_scene() }
@@ -5638,10 +5684,14 @@ impl Editor {
     }
 
     pub(crate) fn replace_document(&mut self, scene: Scene, path: Option<PathBuf>) {
+        let comparison = self.oxymorph_comparison().is_some();
         self.pointer_up();
         self.job = None;
         self.oxymorph = None;
         self.scene = scene;
+        if comparison {
+            self.apply_pane_canvas();
+        }
         self.import_findings.clear();
         self.show_import_inspection = false;
         // Pieces from older files have no symmetry centre yet: pick one
@@ -5746,6 +5796,7 @@ impl Editor {
     /// Always open and activate a fresh document tab without reusing the active
     /// starter tab (used by the `+` tab button, New tab, and `Ctrl+T`).
     pub fn add_tab(&mut self, which: &str) -> usize {
+        let comparison = self.oxymorph_comparison().is_some();
         self.show_welcome = false;
         self.pointer_up();
         self.release_pointer();
@@ -5776,6 +5827,9 @@ impl Editor {
         (doc.matcap, doc.custom_matcap) = material;
         self.documents.push(doc);
         self.active_document = self.documents.len() - 1;
+        if comparison {
+            self.apply_pane_canvas();
+        }
         self.status = status;
         self.active_document
     }
@@ -5786,11 +5840,15 @@ impl Editor {
         if new_index >= self.documents.len() || new_index == self.active_document {
             return;
         }
+        let comparison = self.oxymorph_comparison().is_some();
         self.pointer_up();
         self.release_pointer();
         self.quick_menu = None;
         self.pointer_slider = None;
         self.active_document = new_index;
+        if comparison || self.oxymorph_comparison().is_some() {
+            self.apply_pane_canvas();
+        }
         self.tab_use_clock += 1;
         self.documents[new_index].last_used = self.tab_use_clock;
     }
@@ -7951,7 +8009,7 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
-        if self.oxymorph_preview_pair().is_some() {
+        if self.oxymorph_comparison().is_none() && self.oxymorph_preview_pair().is_some() {
             return self.oxymorph_preview_mesh_mut();
         }
         if self.finishing_stamp_piece().is_some() {
@@ -8011,7 +8069,9 @@ impl Editor {
 
     /// The piece replaced by a preview that keeps the piece's material.
     pub fn preview_in_place(&self) -> Option<u64> {
-        if let Some([source, _]) = self.oxymorph_preview_pair() {
+        if self.oxymorph_comparison().is_none()
+            && let Some([source, _]) = self.oxymorph_preview_pair()
+        {
             return Some(source);
         }
         if let Some(piece) = self.finishing_stamp_piece().or_else(|| self.scene_stamp_preview_piece()) {
@@ -8128,7 +8188,7 @@ impl Editor {
     }
 
     pub fn floor(&self, camera: &Camera) -> Option<oxy_render::FloorGrid> {
-        let bounds = self.scene.bounds();
+        let bounds = self.oxymorph_compare_bounds().unwrap_or_else(|| self.scene.bounds());
         let (min, max) = if bounds.is_empty() {
             let h = camera.distance.max(1e-3) * 0.25;
             ([-h, 0.0, -h], [h, 0.0, h])
@@ -10367,6 +10427,9 @@ impl Editor {
     }
 
     pub fn frame(&mut self) {
+        if self.frame_oxymorph() {
+            return;
+        }
         self.orbit_pivot = None;
         let bounds = self.scene.bounds();
         self.camera.frame(bounds);
@@ -10375,6 +10438,9 @@ impl Editor {
     /// Centre and frame the active piece (F), or every visible piece when
     /// the active one is hidden.
     pub fn frame_active(&mut self) {
+        if self.frame_oxymorph() {
+            return;
+        }
         self.orbit_pivot = None;
         let Some(piece) = self.scene.try_active() else {
             // Nothing to fit: leave the camera where it is.
@@ -10390,6 +10456,25 @@ impl Editor {
             self.frame();
             self.status = "Framed all visible pieces".into();
         }
+    }
+
+    fn frame_oxymorph(&mut self) -> bool {
+        let Some(bounds) = self.oxymorph_compare_bounds() else { return false };
+        self.orbit_pivot = None;
+        self.camera.target = bounds.center();
+        // All panes have the same height and view scale. Fit the narrower
+        // source pane using the bounds projected onto the camera axes.
+        let [_, _, w, h] = crate::oxymorph::ComparePane::A.rect(self.canvas_full);
+        let aspect = (w / h.max(1.0)).max(0.05);
+        let half = bounds.extent() * 0.5;
+        let forward = self.camera.forward();
+        let up = self.camera.up();
+        let right = forward.cross(up);
+        let fit_height = half.dot(up.abs()).max(half.dot(right.abs()) / aspect);
+        let depth = if self.camera.orthographic { 0.0 } else { half.dot(forward.abs()) };
+        self.camera.distance = (fit_height / (0.9 * (self.camera.fov_y * 0.5).tan()) + depth).clamp(1e-3, 1e5);
+        self.status = "Framed A, Mix and B".into();
+        true
     }
 
     pub fn adjust_radius(&mut self, factor: f32) {
@@ -11356,6 +11441,106 @@ mod tests {
         assert!(e.oxymorph.is_none());
         e.switch_tab(a);
         assert!(e.oxymorph.is_some());
+    }
+
+    #[test]
+    fn oxymorph_comparison_routes_sculpting_pin_paint_and_undo() {
+        use crate::oxymorph::ComparePane;
+        use oxy_mesh::morph::MixBrush;
+
+        let mut e = editor();
+        e.canvas_full = [35.0, 55.0, 1000.0, 480.0];
+        let a = e.scene.active().id;
+        let original = e.scene.active().mesh.positions.clone();
+        let topology = e.scene.active().mesh.topology_version();
+        e.oxymorph_open();
+        e.oxymorph_fork();
+        let b = e.scene.active().id;
+        e.scene.get_mut(a).unwrap().visible = false;
+        e.symmetry.x = false;
+        e.brush_kind = BrushKind::Draw;
+        e.dyntopo = true;
+        e.oxymorph_set_compare(true);
+        let center_of = |pane: ComparePane, full| {
+            let [x, y, w, h] = pane.rect(full);
+            Vec2::new(x + w / 2.0, y + h / 2.0)
+        };
+        let mix_at = center_of(ComparePane::Mix, e.canvas_full);
+        let a_at = center_of(ComparePane::A, e.canvas_full);
+        let b_at = center_of(ComparePane::B, e.canvas_full);
+
+        e.oxymorph.as_mut().unwrap().set_brush(Some(MixBrush::KeepB));
+        e.pointer = Some(mix_at);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::OxyMorphPaint));
+        e.pointer_up();
+        assert!(e.oxymorph_can_history(false).unwrap());
+        let pinned_before = e.oxymorph_preview_mesh_mut().unwrap().positions.clone();
+
+        e.pointer = Some(b_at);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Stroke { dyn_topo: None, .. }));
+        assert_eq!(e.scene.active().id, b);
+        e.pointer_moved(b_at + Vec2::new(10.0, 0.0));
+        e.flush_drag();
+        assert_eq!(e.oxymorph_comparison(), Some((ComparePane::B, [a, b])));
+        e.oxymorph_refresh_comparison();
+        let painted_b = e.scene.active().mesh.positions.clone();
+        let live = &e.oxymorph_preview_mesh_mut().unwrap().positions;
+        assert!(live.iter().zip(&painted_b).zip(&original).any(|((mix, b), orig)| mix == b && b != orig));
+        assert_ne!(live, &pinned_before);
+        assert_eq!(e.scene.active().mesh.topology_version(), topology);
+        e.pointer_up();
+        e.undo();
+        assert_eq!(e.scene.get(b).unwrap().mesh.positions, original);
+        assert!(e.dyntopo, "comparison does not change the user's setting");
+
+        e.pointer = Some(a_at);
+        e.pointer_down(PointerButton::Primary);
+        assert_eq!(e.scene.active().id, a);
+        assert!(matches!(e.drag, Drag::Stroke { .. }), "comparison shows hidden endpoints");
+        e.pointer_up();
+        assert_ne!(e.scene.get(a).unwrap().mesh.positions, original);
+        assert_eq!(e.scene.get(b).unwrap().mesh.positions, original);
+        assert!(!e.scene.get(a).unwrap().visible);
+
+        e.oxymorph_refresh_comparison();
+        e.oxymorph_focus(ComparePane::Mix);
+        assert_eq!(e.canvas, ComparePane::Mix.rect(e.canvas_full));
+        let revision = e.history.revision();
+        e.undo();
+        assert_eq!(e.history.revision(), revision);
+        assert!(e.oxymorph_can_history(true).unwrap());
+    }
+
+    #[test]
+    fn oxymorph_comparison_uses_one_camera_and_restores_existing_layout() {
+        use crate::{oxymorph::ComparePane, split_view::SplitLayout};
+
+        let mut e = editor();
+        e.canvas_full = [50.0, 20.0, 800.0, 600.0];
+        e.set_split(SplitLayout::TopBottom);
+        e.oxymorph_open();
+        e.oxymorph_fork();
+        e.oxymorph_set_compare(true);
+        let initial_yaw = e.camera.yaw;
+        e.oxymorph_focus(ComparePane::A);
+        e.orbit_by(Vec2::new(20.0, 0.0));
+        let yaw = e.camera.yaw;
+        assert_ne!(yaw, initial_yaw);
+        e.oxymorph_focus(ComparePane::B);
+        assert_eq!(e.camera.yaw, yaw);
+        assert_eq!(e.canvas, ComparePane::B.rect(e.canvas_full));
+        let project = e.active_document;
+        let tab = e.add_tab("sphere");
+        assert!(e.oxymorph_comparison().is_none());
+        e.switch_tab(project);
+        assert_eq!(e.oxymorph_comparison().unwrap().0, ComparePane::B);
+        assert_eq!(e.camera.yaw, yaw);
+        e.oxymorph_set_compare(false);
+        assert_eq!(e.split, SplitLayout::TopBottom);
+        assert_eq!(e.canvas, [50.0, 20.0, 800.0, 298.0]);
+        assert_ne!(tab, project);
     }
 
     #[test]

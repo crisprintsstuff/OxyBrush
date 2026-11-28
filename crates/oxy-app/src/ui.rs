@@ -1098,7 +1098,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 
     let canvas = ui.available_rect_before_wrap();
     crate::viewport_image::paint(ui, ed, canvas);
-    split_view_overlay(ui, ed, canvas);
+    if let Some((pane, _)) = ed.oxymorph_comparison() {
+        oxymorph_panes(ui, canvas, pane, ed.pixels_per_point);
+    } else {
+        split_view_overlay(ui, ed, canvas);
+    }
     // Overlays: keep them out of the way of the welcome window.
     if !ed.show_welcome {
         if ed.show_panels {
@@ -1138,6 +1142,33 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 }
 
 /// Accent rim on the active pane and a drag strip on the divider.
+fn oxymorph_panes(ui: &Ui, canvas: egui::Rect, active: crate::oxymorph::ComparePane, ppp: f32) {
+    use crate::oxymorph::ComparePane;
+
+    let full = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
+    for pane in ComparePane::ALL {
+        let [x, y, w, h] = pane.rect(full);
+        let rect = egui::Rect::from_min_size(egui::pos2(x, y) / ppp, egui::vec2(w, h) / ppp);
+        let painter = ui.painter_at(rect);
+        if pane == active {
+            painter.rect_stroke(
+                rect.shrink(1.0),
+                0.0,
+                EStroke::new(2.0, ui.visuals().selection.bg_fill),
+                egui::StrokeKind::Inside,
+            );
+        }
+        let label = painter.layout_no_wrap(pane.label().into(), egui::FontId::proportional(14.0), Color32::WHITE);
+        let pos = rect.left_bottom() + egui::vec2(12.0, -12.0 - label.size().y);
+        painter.rect_filled(
+            egui::Rect::from_min_size(pos, label.size()).expand2(egui::vec2(6.0, 3.0)),
+            4.0,
+            Color32::from_black_alpha(165),
+        );
+        painter.galley(pos, label, Color32::WHITE);
+    }
+}
+
 fn split_view_overlay(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
     if !ed.split.is_split() {
         return;
@@ -4813,7 +4844,7 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
-    if ed.oxymorph_preview_pair().is_some() {
+    if ed.oxymorph_mix_focused() {
         if let Some((brush, _, _)) = ed.oxymorph_brush() {
             return match brush {
                 oxy_mesh::morph::MixBrush::KeepA => "OxyMorph · drag to keep A · drag off the mesh to orbit",
@@ -4823,6 +4854,9 @@ pub fn context_hint(ed: &Editor) -> String {
             .into();
         }
         return "OxyMorph preview · drag to orbit · wheel to zoom".into();
+    }
+    if let Some((pane, _)) = ed.oxymorph_comparison() {
+        return format!("OxyMorph · sculpt {} · paint pins in Mix", pane.label());
     }
     if let Some(pe) = ed.poly_edit.as_ref() {
         return format!(
@@ -5284,7 +5318,7 @@ fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Surface Noise…", Cmd::SurfaceNoiseWindow).clicked() {
         ed.surface_noise_open();
     }
-    if tips::button(ui, "OxyMorph…", Cmd::OxyMorph).clicked() {
+    if tips::button(ui, "OxyMorph (Beta)…", Cmd::OxyMorph).clicked() {
         ed.oxymorph_open();
     }
     if tips::button(ui, "Scale cover…", Cmd::ScaleCoverWindow).clicked() {
@@ -8948,10 +8982,26 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     if size_slider_ring(ui, ed, canvas) {
         return;
     }
-    if !ed.pointer_in_canvas() {
-        return;
-    }
     let Some(p) = ed.pointer else { return };
+    let comparison = ed.oxymorph_comparison().map(|(pane, _)| pane);
+    let mut hovered = None;
+    let canvas = if let Some(active) = comparison {
+        use crate::oxymorph::ComparePane;
+        let hover = if matches!(ed.drag, Drag::None) {
+            let Some(pane) = ComparePane::at(ed.canvas_full, p) else { return };
+            pane
+        } else {
+            active
+        };
+        hovered = Some(hover);
+        let ppp = ed.pixels_per_point;
+        let [x, y, w, h] = hover.rect(ed.canvas_full);
+        canvas.intersect(egui::Rect::from_min_size(egui::pos2(x, y) / ppp, egui::vec2(w, h) / ppp))
+    } else if ed.pointer_in_canvas() {
+        canvas
+    } else {
+        return;
+    };
     let pos = egui::pos2(p.x, p.y) / ed.pixels_per_point;
     if !canvas.contains(pos) || ui.ctx().is_pointer_over_egui() {
         return;
@@ -8967,12 +9017,16 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
     let painter = ui.painter().with_clip_rect(canvas);
 
-    if ed.oxymorph_preview_pair().is_some() {
+    if hovered.map_or_else(|| ed.oxymorph_mix_focused(), |pane| pane == crate::oxymorph::ComparePane::Mix) {
         if let Some((_, radius, color)) = ed.oxymorph_brush() {
             painter.circle_stroke(pos, radius, EStroke::new(1.5, color));
         } else {
             ui.ctx().set_cursor_icon(egui::CursorIcon::AllScroll);
         }
+        return;
+    }
+    if hovered != comparison {
+        painter.circle_stroke(pos, ed.brush_radius_pt, EStroke::new(1.0, ed.accent_color()));
         return;
     }
 
