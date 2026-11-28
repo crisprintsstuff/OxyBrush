@@ -43,6 +43,8 @@
 //!   Readers fall back to the scene's matcap for unfamiliar keys.
 //! - `FUR1` (optional): a piece's viewport fur settings and roots in saved
 //!   triangle order. Older readers open the piece without the coat.
+//! - `FGR1` (optional, follows `FUR1`): guide roots and tangent headings,
+//!   followed by three weighted guide indices for each `FUR1` root.
 //! - `INST` (optional, since 4.0.0-beta.12): surface instances on the
 //!   **preceding** `PIEC` (RFC 0022): `count:u32` then per instancer
 //!   `source:u32` (the source piece's place among the file's pieces, from
@@ -399,6 +401,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(coat) = &p.fur {
             sections.push((*b"FUR1", encode_fur(coat)));
+            if let Some(groom) = coat.groom.as_ref().filter(|groom| groom.is_combed()) {
+                sections.push((*b"FGR1", encode_groom(groom)));
+            }
         }
         if p.instancers.iter().any(|ins| ins.settings.place.needs_ins3()) {
             let legacy: Vec<_> = p.instancers.iter().filter(|ins| !ins.settings.place.extended()).cloned().collect();
@@ -1121,6 +1126,14 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 match decode_fur(&raw) {
                     Ok(coat) => piece.fur = Some(coat.into()),
                     Err(e) => log::warn!("ignoring a damaged fur coat on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"FGR1" => {
+                if let Some(coat) = scene.pieces.last_mut().and_then(|piece| piece.fur.as_mut()) {
+                    match decode_groom(&raw, coat.roots.len()) {
+                        Ok(groom) => std::sync::Arc::make_mut(coat).groom = Some(groom),
+                        Err(e) => log::warn!("ignoring a damaged fur groom: {e}"),
+                    }
                 }
             }
             b"INST" | b"INS2" | b"INS3" => {
@@ -1916,7 +1929,7 @@ fn encode_fur(coat: &oxy_mesh::fur::Coat) -> Vec<u8> {
     }
     bytes.extend_from_slice(&settings.seed.to_le_bytes());
     bytes.extend_from_slice(&(coat.roots.len() as u32).to_le_bytes());
-    for root in &coat.roots {
+    for root in coat.roots.iter() {
         bytes.extend_from_slice(&root.triangle.to_le_bytes());
         for weight in root.weights {
             bytes.extend_from_slice(&weight.to_le_bytes());
@@ -1950,7 +1963,66 @@ fn decode_fur(raw: &[u8]) -> Result<oxy_mesh::fur::Coat> {
         }
         roots.push(Root { triangle, weights, key: r.u32()? });
     }
-    Ok(Coat { settings, topology, roots })
+    Ok(Coat { settings, topology, roots: roots.into(), groom: None })
+}
+
+fn encode_groom(groom: &oxy_mesh::fur::Groom) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + groom.guide_roots.len() * 12 + groom.influences.len() * 18);
+    bytes.extend_from_slice(&(groom.guide_roots.len() as u32).to_le_bytes());
+    for (&root, direction) in groom.guide_roots.iter().zip(&groom.directions) {
+        bytes.extend_from_slice(&root.to_le_bytes());
+        bytes.extend_from_slice(&direction.x.to_le_bytes());
+        bytes.extend_from_slice(&direction.y.to_le_bytes());
+    }
+    for influence in groom.influences.iter() {
+        for guide in influence.guides {
+            bytes.extend_from_slice(&guide.to_le_bytes());
+        }
+        for weight in influence.weights {
+            bytes.extend_from_slice(&weight.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+fn decode_groom(raw: &[u8], roots: usize) -> Result<oxy_mesh::fur::Groom> {
+    use oxy_mesh::fur::{Groom, Influence};
+    let mut r = Reader { data: raw, pos: 0 };
+    let guides = r.u32()? as usize;
+    if guides == 0 || guides > roots || r.remaining() != guides * 12 + roots * 18 {
+        return Err(Error::Corrupt("invalid fur guide count".into()));
+    }
+    let mut seen = vec![false; roots];
+    let mut guide_roots = Vec::with_capacity(guides);
+    let mut directions = Vec::with_capacity(guides);
+    for _ in 0..guides {
+        let root = r.u32()?;
+        let direction = glam::Vec2::new(r.f32()?, r.f32()?);
+        if root as usize >= roots || seen[root as usize] || !direction.is_finite() || direction.length_squared() > 1.001
+        {
+            return Err(Error::Corrupt("invalid fur guide".into()));
+        }
+        seen[root as usize] = true;
+        guide_roots.push(root);
+        directions.push(direction);
+    }
+    let mut influences = Vec::with_capacity(roots);
+    for _ in 0..roots {
+        let mut links = [0u16; 3];
+        for link in &mut links {
+            *link = u16::from_le_bytes(r.take(2)?.try_into().expect("2 bytes"));
+        }
+        let weights = [r.f32()?, r.f32()?, r.f32()?];
+        let total = weights.iter().sum::<f32>();
+        if links.iter().any(|&index| index as usize >= guides)
+            || !weights.iter().all(|w| (0.0..=1.0).contains(w))
+            || (total != 0.0 && (total - 1.0).abs() > 0.001)
+        {
+            return Err(Error::Corrupt("invalid fur guide weights".into()));
+        }
+        influences.push(Influence { guides: links, weights });
+    }
+    Ok(Groom { guide_roots: guide_roots.into(), influences: influences.into(), directions })
 }
 
 /// One instancer's bytes in `INST` / `INS2` (see the header).
@@ -2672,6 +2744,32 @@ mod tests {
         };
         assert_eq!(decode(&encode(&right_only)).unwrap().references[0].placement.axis, ReferenceAxis::Right);
         assert_eq!(ReferenceAxis::ALL.iter().position(|&a| a == ReferenceAxis::Right), Some(1));
+    }
+
+    #[test]
+    fn combed_fur_round_trips_and_a_damaged_groom_keeps_the_coat() {
+        use oxy_mesh::Mesh;
+        use oxy_mesh::fur::{Coat, Settings};
+        let mut scene = sample();
+        let mesh = Mesh::from_data(scene.pieces[0].mesh.clone());
+        let mut coat = Coat::generate(&mesh.to_data(), Settings::for_span(2.0));
+        let mut groom = coat.bind_groom(&mesh.positions, &mesh.normals, &mesh.triangles).unwrap();
+        groom.directions[0] = glam::Vec2::new(0.4, -0.1);
+        coat.groom = Some(groom);
+        scene.pieces[0].mesh = mesh.to_data();
+        scene.pieces[0].fur = Some(coat.clone().into());
+        let mut bytes = encode(&scene);
+        assert_eq!(decode(&bytes).unwrap().pieces[0].fur.as_deref(), Some(&coat));
+        let i = bytes.windows(4).position(|w| w == b"FGR1").unwrap();
+        bytes[i..i + 4].copy_from_slice(b"OLD!");
+        let old = decode(&bytes).unwrap();
+        let old_coat = old.pieces[0].fur.as_ref().unwrap();
+        assert_eq!(old_coat.roots, coat.roots);
+        assert!(old_coat.groom.is_none());
+
+        let mut record = encode_groom(coat.groom.as_ref().unwrap());
+        record[8..12].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(decode_groom(&record, coat.roots.len()).is_err());
     }
 
     #[test]

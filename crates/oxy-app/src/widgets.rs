@@ -1481,7 +1481,7 @@ pub fn section<R>(
     default_open: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
-    section_with_id(ui, title, title, tip, default_open, add)
+    section_with_id(ui, title, title, tip, default_open, None, add)
 }
 
 pub fn section_with_id<R>(
@@ -1490,6 +1490,7 @@ pub fn section_with_id<R>(
     title: &str,
     tip: &str,
     default_open: bool,
+    open: Option<bool>,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let header = if studio_style() {
@@ -1502,7 +1503,7 @@ pub fn section_with_id<R>(
     } else {
         egui::RichText::new(title).strong().size(14.0)
     };
-    let opened = egui::CollapsingHeader::new(header).id_salt(id).default_open(default_open).show(ui, add);
+    let opened = egui::CollapsingHeader::new(header).id_salt(id).default_open(default_open).open(open).show(ui, add);
     crate::tips::hover(opened.header_response.clone(), tip);
     ui.add_space(2.0);
     opened.body_returned
@@ -1526,9 +1527,11 @@ mod tests {
     #[test]
     fn section_stays_open_when_its_title_changes() {
         let ctx = egui::Context::default();
-        for (title, default_open) in [("Alpha", true), ("Alpha: Scales", false)] {
+        for (title, open, expected) in
+            [("Alpha", None, false), ("Alpha", Some(true), true), ("Alpha: Scales", None, true)]
+        {
             let mut output = ctx.run_ui(Default::default(), |ui| {
-                assert!(section_with_id(ui, "Alpha", title, "", default_open, |_| ()).is_some());
+                assert_eq!(section_with_id(ui, "Alpha", title, "", false, open, |_| ()).is_some(), expected);
             });
             output.textures_delta.clear();
         }

@@ -814,6 +814,7 @@ pub enum SelectAction {
 pub enum Drag {
     None,
     OxyMorphPaint,
+    FurComb(Box<crate::fur::CombStroke>),
     /// A Paint Groups stroke: painting face group `group` on `piece`, whose
     /// groups were `before` when it started (for undo or Escape). `last`
     /// is the previous dab, to fill the path between pointer events.
@@ -1154,6 +1155,11 @@ pub enum JobResult {
     /// mesh and how many copies it holds.
     MadeReal(String, Mesh, usize),
     Fur {
+        coat: Arc<oxy_mesh::fur::Coat>,
+        source: [u64; 3],
+    },
+    FurGuides {
+        groom: oxy_mesh::fur::Groom,
         coat: Arc<oxy_mesh::fur::Coat>,
         source: [u64; 3],
     },
@@ -2181,6 +2187,7 @@ impl Editor {
                 | Drag::ShapeCut { .. }
                 | Drag::GroupPaint { .. }
                 | Drag::OxyMorphPaint
+                | Drag::FurComb(_)
         )
     }
 
@@ -2195,6 +2202,7 @@ impl Editor {
                 | Drag::ShapeCut { .. }
                 | Drag::GroupPaint { .. }
                 | Drag::OxyMorphPaint
+                | Drag::FurComb(_)
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
                 | Drag::CurveDraw { .. }
@@ -2890,7 +2898,7 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
-        if matches!(self.drag, Drag::OxyMorphPaint) {
+        if matches!(self.drag, Drag::OxyMorphPaint | Drag::FurComb(_)) {
             self.pointer_up();
         }
         let comparison = self.oxymorph_comparison().is_some();
@@ -2972,6 +2980,17 @@ impl Editor {
             return;
         }
         if !comparison && self.tube_pointer_down(p) {
+            return;
+        }
+        if self.fur_comb_active() {
+            let action = self.keymap.nav_action(NavButton::Left, self.active_modifiers());
+            self.drag = if action.is_none()
+                && let Some(stroke) = self.start_fur_comb(p)
+            {
+                Drag::FurComb(Box::new(stroke))
+            } else {
+                self.drag_for_nav(Some(action.unwrap_or(NavAction::Orbit)), button)
+            };
             return;
         }
         // Nothing to sculpt: a press orbits (or pans, if the keymap says so).
@@ -4159,6 +4178,10 @@ impl Editor {
             | Drag::PolyEdit(_)
             | Drag::PolyPaintPick { .. }
             | Drag::PolyGizmo(_) => true,
+            Drag::FurComb(_) => {
+                self.move_fur_comb(pos);
+                true
+            }
             Drag::OxyMorphPaint => {
                 self.oxymorph_paint_move(pos);
                 true
@@ -4584,6 +4607,10 @@ impl Editor {
     }
 
     fn finish_pointer_gesture(&mut self, background: bool) {
+        if matches!(self.drag, Drag::FurComb(_)) {
+            self.finish_fur_comb(false);
+            return;
+        }
         if matches!(self.drag, Drag::OxyMorphPaint) {
             self.drag = Drag::None;
             self.oxymorph_paint_end(false);
@@ -4783,6 +4810,15 @@ impl Editor {
 
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
+        if matches!(self.drag, Drag::FurComb(_)) {
+            self.finish_fur_comb(true);
+            return;
+        }
+        if self.fur_comb_active() && matches!(self.drag, Drag::None) {
+            self.fur_comb = None;
+            self.status = "Done combing".into();
+            return;
+        }
         if matches!(self.drag, Drag::OxyMorphPaint) {
             self.drag = Drag::None;
             self.oxymorph_paint_end(true);
@@ -6799,7 +6835,7 @@ impl Editor {
 
     /// Save document at `doc_idx` to `path`.
     pub fn save_doc(&mut self, doc_idx: usize, path: &Path) -> bool {
-        if doc_idx == self.active_document && matches!(self.drag, Drag::OxyMorphPaint) {
+        if doc_idx == self.active_document && matches!(self.drag, Drag::OxyMorphPaint | Drag::FurComb(_)) {
             self.pointer_up();
         }
         let Some(doc) = self.documents.get(doc_idx) else { return false };
@@ -9663,6 +9699,21 @@ impl Editor {
                     self.active_document = prev_active;
                     st
                 }
+            }
+            Ok(JobResult::FurGuides { groom, coat, source }) => {
+                let doc = &mut self.documents[doc_idx];
+                let Some(piece) = doc.scene.get_mut(job.target) else {
+                    return "Preparing fur guides cancelled because the piece was removed".into();
+                };
+                if crate::fur::versions(&piece.mesh) != source
+                    || !piece.fur.as_ref().is_some_and(|current| Arc::ptr_eq(current, &coat))
+                {
+                    return "Preparing fur guides cancelled because the coat changed".into();
+                }
+                let mut updated = (*coat).clone();
+                updated.groom = Some(groom);
+                piece.fur = Some(Arc::new(updated));
+                "Drag on the surface to comb the coat".into()
             }
             Ok(JobResult::Fur { coat, source }) => {
                 let doc = &mut self.documents[doc_idx];
@@ -14998,6 +15049,43 @@ mod tests {
         e.max_triangles = before.triangle_count() + 10;
         e.subdivide_masked();
         assert!(e.status.contains("limit"), "{}", e.status);
+    }
+
+    #[test]
+    fn comb_routes_pointer_drags_to_groom_and_undo_as_one_step() {
+        use oxy_mesh::fur::{Coat, Settings};
+        let mut e = editor();
+        let mesh = &e.scene.active().mesh;
+        let mut coat = Coat::generate(&mesh.to_data(), Settings::for_span(2.0));
+        coat.groom = coat.bind_groom(&mesh.positions, &mesh.normals, &mesh.triangles);
+        let before = Arc::new(coat);
+        e.scene.active_mut().fur = Some(Arc::clone(&before));
+        let geometry = e.scene.active().mesh.positions.clone();
+        let pixel = Vec2::new(e.canvas[0] + e.canvas[2] * 0.5, e.canvas[1] + e.canvas[3] * 0.5);
+        e.toggle_fur_comb();
+        assert!(e.fur_comb_active());
+        e.pointer = Some(pixel);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::FurComb(_)));
+        e.pointer_moved(pixel + Vec2::X * 16.0);
+        e.pointer_moved(pixel + Vec2::X * 32.0);
+        e.pointer_up();
+        let after = e.scene.active().fur.clone().unwrap();
+        assert!(after.groom.as_ref().unwrap().is_combed());
+        assert_eq!(after.roots, before.roots);
+        assert_eq!(e.scene.active().mesh.positions, geometry);
+
+        e.undo();
+        assert_eq!(e.scene.active().fur.as_ref(), Some(&before));
+        e.pointer = Some(pixel);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(pixel + Vec2::Y * 20.0);
+        e.cancel_drag();
+        assert_eq!(e.scene.active().fur.as_ref(), Some(&before));
+        e.redo();
+        assert_eq!(e.scene.active().fur.as_ref(), Some(&after));
+        e.cancel_drag();
+        assert!(!e.fur_comb_active());
     }
 
     #[test]
