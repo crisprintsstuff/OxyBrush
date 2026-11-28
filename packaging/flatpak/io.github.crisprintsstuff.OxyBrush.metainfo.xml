@@ -52,6 +52,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.2.1" date="2026-11-28" type="stable">
+      <description>
+        <p>Grow and comb fur previews on a sculpt, and save the groom with the project.</p>
+        <p>Dock Materials and tool menus beside the viewport, and export viewport or full-window screenshots.</p>
+        <p>Pick shapes from the brush shelf and see the face groups created by shaped Line Split strokes.</p>
+      </description>
+    </release>
     <release version="4.2.0" date="2026-11-28" type="stable">
       <description>
         <p>Sculpt two versions of a piece in OxyMorph Beta, paint the blend, and save an unfinished mix.</p>

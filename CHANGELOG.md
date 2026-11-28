@@ -4,13 +4,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-28
+
 ### Added
 
 - **Dockable menus.** Drag the Materials, Pieces, Mesh, Tools, Groups, Mask, or View header to either sidebar, or use **Dock left** and **Dock right**. Use **Undock** to remove it. Placements are remembered. [RFC 0061](docs/rfcs/0061-dockable-menus.md)
-
-- **Fur coat.** Grow a short preview coat on a piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Comb strokes lean the strands as you drag. Growing, resizing, grooming, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
+- **Fur coat.** Grow a short preview coat on a single-level piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Comb strokes lean the strands as you drag. Growing, resizing, grooming, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
 - **Materials panel.** Open the inspector’s Matcaps, Glass, and Fur tabs from **View > Materials panel…** or from the shelf material picker.
-
 - **Screenshot export.** Save the current viewport or the full OxyBrush window as PNG, JPEG, or WebP from **File > Export screenshot…**. [RFC 0060](docs/rfcs/0060-screenshot-export.md)
 
 ### Changed
@@ -1365,7 +1365,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.2.1...HEAD
+[4.2.1]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.2.0...v4.2.1
 [4.2.0]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.4...v4.2.0
 [4.1.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.3...v4.1.4
 [4.1.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.1.2...v4.1.3

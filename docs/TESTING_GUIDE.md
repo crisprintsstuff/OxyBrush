@@ -20,7 +20,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-4.2.0-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-4.2.1-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -41,6 +41,13 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
 10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
 
+## 4.2.1 smoke test
+
+1. **Fur.** On a single-level sculpt, grow a coat on the masked area or a face group. Comb it, Undo and Redo, then save and reopen to check that the groom returns.
+2. **Materials and docking.** Switch between Clear Glass and Frosted Glass in one shelf picker. Open **Glass settings…**, adjust IOR, and apply the preview. Drag the Materials heading to a sidebar, move it to the other side, and undock it.
+3. **Screenshot export.** Export a viewport PNG and a full-window WebP from **File > Export screenshot…**. Open both files and check which includes the interface.
+4. **Selection and Line Split.** Pick shapes from the Selection tile. Verify that Ctrl and Ctrl+Shift leave the brushes in place on the side and bottom shelves. With Wireframe on and face group colors off, apply a shaped Line Split and check that the new group is visible.
+
 ## 4.2.0 smoke test
 
 1. **OxyMorph (Beta).** Fork B from a piece and open **Compare A / Mix / B**. Sculpt in each outer pane and paint **Keep A** and **Keep B** in the center. Move the mix slider and check that pinned areas stay with their variant. Save with the panel open and reopen to check that the session resumes.
@@ -58,7 +65,7 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 2. **Retopology Contour.** Drag two cuts across a closed limb and look for a quad strip. Choose **New strip** before cutting a second limb.
 3. **Layers and subdivision.** Add sculpt and paint strokes at a fine level. Switch to a lower level and adjust the layer strength. Go back up and check that the detail follows. Save and reopen before checking the controls again.
 4. **Alphas and Stamp.** Load a JPEG, TIFF, WebP, or PSD composite into Alpha and rotate its preview. Try a directional alpha and Roll with changing pressure. Drag a large Scene Project stamp over a busy scene to check preview responsiveness.
-5. **Viewport and selection.** Sculpt and orbit in both panes of Split view. In Poly Edit, check Box, Lasso, and Ellipse outlines. Pick shapes from the Selection tile on the brush shelf. Verify that Ctrl and Ctrl+Shift leave the brushes in place on the side and bottom shelves. With Wireframe on and face group colors off, apply a shaped Line Split and check that the new group is visible.
+5. **Viewport and selection.** Sculpt and orbit in both panes of Split view. In Poly Edit, check Box, Lasso, and Ellipse outlines.
 
 ## OxySpheres regeneration and earlier regressions
 
