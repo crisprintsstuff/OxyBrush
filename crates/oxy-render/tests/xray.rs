@@ -40,6 +40,16 @@ fn xray_and_glass_respect_opaque_depth() {
     for (id, mesh) in [(1, &mut front), (2, &mut back), (3, &mut back_wire)] {
         viewport.sync(&device, &queue, id, mesh, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, true);
     }
+    let mut open = oxy_mesh::Mesh::new(
+        vec![
+            Vec3::new(-1.0, -1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+        ],
+        vec![[0, 1, 2], [0, 2, 3]],
+    );
+    viewport.sync(&device, &queue, 4, &mut open, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, false);
     viewport.set_instances(&device, &queue, 1, &[Mat4::IDENTITY]);
     let camera = Camera::default();
     let item = DrawItem {
@@ -216,4 +226,38 @@ fn xray_and_glass_respect_opaque_depth() {
         Some(board()),
     );
     assert_eq!(clear, shaded_glass, "without opaque meshes the background has no AO");
+
+    // With refraction and Fresnel disabled, the tint should follow just the
+    // distance through the sphere. A flat background makes that measurable.
+    let white = || ReferencePlane { pixels: [255; 4].into(), ..reference(false) };
+    let tint = GlassMaterial { tint: [100, 200, 255], ior: 1.0, roughness: 0.0, ..GlassMaterial::CLEAR };
+    let body = GlassMaterial { absorption: 1.0, ..tint };
+    let tinted = DrawItem { glass: Some(tint), ..item };
+    let absorbing = DrawItem { glass: Some(body), ..item };
+    let uniform = render(&settings, &[tinted], Some(white()));
+    let thickness = render(&settings, &[absorbing], Some(white()));
+    assert!(center(&thickness)[0] + 15 < center(&uniform)[0]);
+    assert_eq!(center(&thickness)[2], 255);
+    assert!(
+        (33..56).any(|x| {
+            sample(&uniform, x, 32) == center(&uniform) && sample(&thickness, x, 32)[0] > center(&uniform)[0] + 10
+        }),
+        "the sphere should transmit more of the background close to its edge"
+    );
+
+    let orthographic = Camera { orthographic: true, ..camera };
+    next_view.set(Some((target, orthographic)));
+    let ortho = render(&settings, &[absorbing], Some(white()));
+    assert!(center(&ortho)[0].abs_diff(center(&thickness)[0]) <= 2);
+
+    let absorbing_rear = DrawItem { glass: Some(body), ..rear };
+    for items in [[absorbing_rear, absorbing], [absorbing, absorbing_rear]] {
+        assert_eq!(center(&render(&settings, &items, Some(white()))), center(&thickness));
+    }
+    let open_uniform = render(&settings, &[DrawItem { id: 4, ..tinted }], Some(white()));
+    let open_thickness = render(&settings, &[DrawItem { id: 4, ..absorbing }], Some(white()));
+    assert_ne!(center(&open_uniform), [255; 4]);
+    assert_eq!(open_uniform, open_thickness, "an open sheet falls back to uniform tint");
+    let instance = render(&settings, &[DrawItem { instances: Some(1), ..absorbing }], Some(white()));
+    assert_eq!(instance, uniform, "instances fall back to uniform tint");
 }
