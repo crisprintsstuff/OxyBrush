@@ -1,6 +1,6 @@
 # RFC 0056 — OxyMorph
 
-- **Status:** Native forking, live blending, and paintable pins implemented. The browser prototype also demonstrates linked panes.
+- **Status:** Beta. Native forking, live blending, paintable pins, and linked comparison implemented.
 - **Scope:** Try two sculpt directions on one piece and paint a third version from them.
 
 ## 1. Concept
@@ -59,7 +59,7 @@ blocks for the feature.
 
 ### First slice
 
-- Open **Tools > OxyMorph** on the displayed mesh of a sculptable piece to
+- Open **Tools > OxyMorph (Beta)** on the displayed mesh of a sculptable piece to
   use it as A. **Fork B** makes an ordinary editable piece with matching
   vertex identity and selects it. Select A or B to keep sculpting in the
   same viewport.
@@ -94,10 +94,23 @@ blocks for the feature.
 - **Create piece from mix** records one scene Undo step. The piece keeps A's
   material, color, and mesh attributes.
 
+### Linked comparison
+
+- Choose **Compare A / Mix / B** in the OxyMorph panel. A and B are shown
+  in separate panes even if one is hidden in the scene. Orbit, pan, zoom,
+  and frame use one camera so all panes have the same angle and scale.
+- Sculpt in the side panes using the regular topology-preserving brushes
+  with **Freehand**, **Line**, or **Stamp**. Dynamic detail is paused during
+  comparison to keep the variants matched. For Curve strokes and
+  topology-changing tools, turn off comparison first.
+- Paint the live mix in the center. Undo and Redo use paint history when
+  the center is focused and regular project history in the outer panes.
+  The **Undo paint** and **Redo paint** buttons work from any pane.
+- Turn off comparison to return to the previous viewport layout.
+
 ### Follow-up scope
 
-- Add linked comparison views so A, the mix, and B can be framed and
-  orbited together. Persist in-progress sessions with projects.
+- Persist in-progress sessions with projects.
 - Limit the first pass to positions. Starting on dense imported meshes,
   mixing paint/materials, comparing different topology, changing
   subdivision levels within a session, and exporting animated blends need

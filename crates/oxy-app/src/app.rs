@@ -812,6 +812,7 @@ impl App {
         // The Insert Primitive and mask extract previews are drawn like a
         // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
+        const MIX_ID: u64 = u64::MAX - 1;
         // Lowest-level copies of pieces (Lighter inactive pieces) are drawn
         // under their piece's id with this bit set.
         const PROXY_FLAG: u64 = 1 << 62;
@@ -823,10 +824,16 @@ impl App {
         ed.update_primitive();
         ed.update_poly_smooth();
         ed.check_link_topology();
-        let ids: Vec<u64> = ed.scene.pieces.iter().filter(|p| p.visible).map(|p| p.id).collect();
+        ed.oxymorph_refresh_comparison();
+        let compare = ed.oxymorph_comparison().map(|(_, pair)| pair);
+        let shown = |p: &oxy_doc::Piece| compare.map_or(p.visible, |pair| pair.contains(&p.id));
+        let ids: Vec<u64> = ed.scene.pieces.iter().filter(|p| shown(p)).map(|p| p.id).collect();
         // A hidden source still supplies the geometry of copies on a shown host.
-        let sources: Vec<u64> =
-            ed.scene.pieces.iter().filter(|p| p.visible).flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
+        let sources: Vec<u64> = if compare.is_some() {
+            Vec::new()
+        } else {
+            ed.scene.pieces.iter().filter(|p| p.visible).flat_map(|p| p.instancers.iter().map(|i| i.source)).collect()
+        };
         let previewing = ed.insert_preview.is_some()
             || ed.extract_preview.is_some()
             || ed.curve.is_some()
@@ -839,15 +846,25 @@ impl App {
         let curve_piece = ed.preview_in_place();
         let morph_pair = ed.oxymorph_preview_pair();
         let morph_map = morph_pair.is_some() && ed.oxymorph_show_map();
+        let single_mix = compare.is_none() && morph_pair.is_some();
         // While another piece is edited, pieces with levels are drawn at
         // their lowest level (Lighter inactive pieces), from a copy kept on
         // the GPU under its own id next to the full mesh, so switching back
         // at the end of a stroke costs nothing.
-        let proxied: Vec<u64> = ids.iter().copied().filter(|&id| ed.lighter_proxy_mut(id).is_some()).collect();
+        let proxied: Vec<u64> = if compare.is_some() {
+            Vec::new()
+        } else {
+            ids.iter().copied().filter(|&id| ed.lighter_proxy_mut(id).is_some()).collect()
+        };
         let proxy_id = |id: u64| id | PROXY_FLAG;
         let kept_proxies: Vec<u64> = ed.documents[ed.active_document].proxies.keys().map(|&id| proxy_id(id)).collect();
         g.viewport.retain(|id| {
-            ids.contains(&id) || sources.contains(&id) || (previewing && id == PREVIEW_ID) || kept_proxies.contains(&id)
+            ids.contains(&id)
+                || sources.contains(&id)
+                || (previewing && !single_mix && id == PREVIEW_ID)
+                || (morph_pair.is_some() && id == MIX_ID)
+                || (compare.is_some() && ed.scene.get(id).is_some())
+                || kept_proxies.contains(&id)
         });
         let active = ed.scene.try_active().map(|p| p.id).unwrap_or(0);
         // Pieces with their own material: give each distinct one a slot.
@@ -858,7 +875,7 @@ impl App {
             p.material.clone()
         };
         let mut wanted: Vec<String> = Vec::new();
-        for p in ed.scene.pieces.iter().filter(|p| p.visible || Some(p.id) == curve_piece || sources.contains(&p.id)) {
+        for p in ed.scene.pieces.iter().filter(|p| shown(p) || Some(p.id) == curve_piece || sources.contains(&p.id)) {
             if let Some(k) = piece_key(p)
                 && ed.resolve_material(&k).is_some()
                 && !wanted.contains(&k)
@@ -898,6 +915,7 @@ impl App {
         let slot_of = |id: u64| slot_map.get(&id).copied().unwrap_or(0);
         let hard_edge_angle = ed.view.hard_edge_angle;
         let mut items = Vec::new();
+        let mut compare_items = [None; 3];
         // The retopology tool draws its piece as an overlay, on top of the surface.
         let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece.filter(|&id| id != r.surface));
         // Poly Edit shows the piece's polygon edges as a depth-tested
@@ -905,14 +923,24 @@ impl App {
         let poly_wire = ed.poly_wire_piece();
         let all_wires = ed.view.wireframe && ed.view.wireframe_opacity > 0.001;
         for p in ed.scene.pieces.iter_mut() {
-            if !p.visible && !sources.contains(&p.id) {
+            if !shown(p) && !sources.contains(&p.id) {
                 continue;
             }
-            let piece_wire = p.visible
+            let piece_wire = shown(p)
                 && (all_wires || Some(p.id) == poly_wire)
                 && p.mesh.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
-            if p.visible
+            if let Some([a, _]) = compare {
+                compare_items[if p.id == a { 0 } else { 2 }] = Some(oxy_render::DrawItem {
+                    id: p.id,
+                    active: true,
+                    preview: false,
+                    material: slot_of(p.id),
+                    instances: None,
+                    wireframe: false,
+                    color_map: false,
+                });
+            } else if p.visible
                 && Some(p.id) != curve_piece
                 && Some(p.id) != retopo_piece
                 && !morph_pair.is_some_and(|pair| pair.contains(&p.id))
@@ -937,7 +965,7 @@ impl App {
         }
         // Surface instances: the source's mesh, drawn once per copy. The
         // transforms are uploaded only when they change.
-        let draws = ed.instance_draws();
+        let draws = if compare.is_some() { Vec::new() } else { ed.instance_draws() };
         let scatter_pending = ed.instance_scatter_pending();
         for d in &draws {
             if morph_pair.is_some_and(|pair| pair.contains(&d.host)) {
@@ -957,27 +985,54 @@ impl App {
                 color_map: false,
             });
         }
-        self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
-        g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
+        if compare.is_none() {
+            self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
+            g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
+        }
         // Add Primitive / Insert Primitive previews always show edges so
         // divisions are visible while adjusting (#568). Other previews follow
         // the global wireframe toggle. Compute before borrowing the mesh.
         let force_preview_wire = ed.preview_forces_wireframe();
+        if let Some([a, _]) = compare
+            && let Some(preview) = ed.oxymorph_preview_mesh_mut()
+        {
+            let wire = all_wires && preview.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
+            g.viewport.sync(&g.device, &g.queue, MIX_ID, preview, hard_edge_angle, wire);
+            compare_items[1] = Some(oxy_render::DrawItem {
+                id: MIX_ID,
+                active: true,
+                preview: false,
+                material: slot_of(a),
+                instances: None,
+                wireframe: false,
+                color_map: morph_map,
+            });
+        }
         if let Some(preview) = ed.preview_mesh_mut() {
+            let preview_id = if single_mix { MIX_ID } else { PREVIEW_ID };
             let preview_wire =
                 (all_wires || force_preview_wire) && preview.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
-            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle, preview_wire);
+            g.viewport.sync(&g.device, &g.queue, preview_id, preview, hard_edge_angle, preview_wire);
             // A piece shown in place (a curve stroke) keeps its material.
             let material = curve_piece.map_or(0, slot_of);
-            items.push(oxy_render::DrawItem {
-                id: PREVIEW_ID,
+            let item = oxy_render::DrawItem {
+                id: preview_id,
                 active: true,
                 preview: curve_piece.is_none(),
                 material,
                 instances: None,
                 wireframe: force_preview_wire,
-                color_map: morph_map,
-            });
+                color_map: single_mix && morph_map,
+            };
+            if let Some([a, b]) = compare {
+                if curve_piece == Some(a) {
+                    compare_items[0] = Some(item);
+                } else if curve_piece == Some(b) {
+                    compare_items[2] = Some(item);
+                }
+            } else {
+                items.push(item);
+            }
         }
 
         let frame = match g.surface.get_current_texture() {
@@ -1009,13 +1064,16 @@ impl App {
         let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         let mut view_settings = oxy_render::ViewSettings {
             scene_bounds: {
-                let b = ed.scene.bounds();
+                let b = ed.oxymorph_compare_bounds().unwrap_or_else(|| ed.scene.bounds());
                 (!b.is_empty()).then(|| (b.min.to_array(), b.max.to_array()))
             },
             ..ed.view
         };
         let pane_cams = ed.pane_cameras();
-        let pane_rects = if ed.split.is_split() {
+        let compare_floor = (ed.floor_grid && compare.is_some()).then(|| ed.floor(&ed.camera));
+        let pane_rects = if compare.is_some() {
+            crate::oxymorph::ComparePane::ALL.map(|pane| pane.rect(ed.canvas_full)).to_vec()
+        } else if ed.split.is_split() {
             crate::split_view::pane_rects(ed.split, ed.canvas_full, ed.split_ratio).to_vec()
         } else {
             vec![ed.canvas]
@@ -1027,8 +1085,12 @@ impl App {
                 encoder =
                     g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("split pane") });
             }
-            let camera = pane_cams[i];
-            view_settings.floor = ed.floor_grid.then(|| ed.floor(camera)).flatten();
+            let (camera, draw_items) = if compare.is_some() {
+                (&ed.camera, compare_items[i].as_slice())
+            } else {
+                (pane_cams[i], items.as_slice())
+            };
+            view_settings.floor = compare_floor.unwrap_or_else(|| ed.floor_grid.then(|| ed.floor(camera)).flatten());
             g.viewport.set_reference_planes(
                 &g.device,
                 &g.queue,
@@ -1046,7 +1108,7 @@ impl App {
                 },
                 camera,
                 &view_settings,
-                &items,
+                draw_items,
             );
         }
         // The agent's screenshot is the viewport without the panels, so copy

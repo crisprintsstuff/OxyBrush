@@ -6,7 +6,7 @@ use crate::editor::Editor;
 use glam::{Vec2, Vec3};
 use oxy_doc::Piece;
 use oxy_mesh::{
-    Mesh, RayHit,
+    Aabb, Mesh, RayHit,
     morph::{MixBrush, MixWeight, blend_positions, surface_dab},
 };
 
@@ -15,6 +15,51 @@ const MAX_PAINT_STROKES: usize = 32;
 const KEEP_A: [u8; 3] = [66, 156, 245];
 const KEEP_B: [u8; 3] = [248, 146, 62];
 const NEUTRAL: [u8; 3] = [185, 185, 185];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComparePane {
+    A,
+    Mix,
+    B,
+}
+
+impl ComparePane {
+    pub(crate) const ALL: [Self; 3] = [Self::A, Self::Mix, Self::B];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::A => "A",
+            Self::Mix => "Mix",
+            Self::B => "B",
+        }
+    }
+
+    pub(crate) fn source(self, [a, b]: [u64; 2]) -> Option<u64> {
+        match self {
+            Self::A => Some(a),
+            Self::Mix => None,
+            Self::B => Some(b),
+        }
+    }
+
+    pub(crate) fn rect(self, [x, y, w, h]: [f32; 4]) -> [f32; 4] {
+        let gap = crate::split_view::DIVIDER_PX.min(w * 0.1);
+        let side = ((w - 2.0 * gap) / 3.0).floor().max(1.0);
+        let middle = (w - 2.0 * (side + gap)).max(1.0);
+        match self {
+            Self::A => [x, y, side, h],
+            Self::Mix => [x + side + gap, y, middle, h],
+            Self::B => [x + side + middle + 2.0 * gap, y, side, h],
+        }
+    }
+
+    pub(crate) fn at(canvas: [f32; 4], pos: Vec2) -> Option<Self> {
+        Self::ALL.into_iter().find(|pane| {
+            let [x, y, w, h] = pane.rect(canvas);
+            pos.x >= x && pos.x < x + w && pos.y >= y && pos.y < y + h
+        })
+    }
+}
 
 fn map_color(weight: MixWeight) -> Vec3 {
     let [a, b] = weight.pins();
@@ -42,6 +87,55 @@ struct MixPreview {
     mesh: Mesh,
 }
 
+impl MixPreview {
+    fn refresh(&mut self, key: PreviewKey, a: &Mesh, positions: Vec<Vec3>, weights: &[MixWeight]) {
+        let mesh = &mut self.mesh;
+        if self.key.show_map != key.show_map {
+            mesh.mask.clone_from(&a.mask);
+            set_preview_colors(mesh, a, key.show_map, weights);
+            mesh.replace_positions(positions);
+        } else {
+            // A and the preview share face data here. Keep the indexed
+            // mesh and update only the vertices affected by an endpoint
+            // stroke, including any vertex color and mask changes on A.
+            let source_changed = self.key.a != key.a;
+            let mut dirty = Vec::new();
+            for (v, (&before, &after)) in mesh.positions.iter().zip(&positions).enumerate() {
+                let attributes_changed =
+                    source_changed && (mesh.mask[v] != a.mask[v] || !key.show_map && mesh.color[v] != a.color[v]);
+                if attributes_changed {
+                    mesh.mask[v] = a.mask[v];
+                    if !key.show_map {
+                        mesh.color[v] = a.color[v];
+                    }
+                }
+                if before != after || attributes_changed {
+                    dirty.push(v as u32);
+                }
+            }
+            if dirty.len() > (mesh.vertex_count() / 8).max(2048) {
+                mesh.replace_positions(positions);
+            } else {
+                for &vertex in &dirty {
+                    mesh.positions[vertex as usize] = positions[vertex as usize];
+                }
+                mesh.update_after_move(&dirty);
+            }
+        }
+        self.key = key;
+    }
+}
+
+fn set_preview_colors(mesh: &mut Mesh, a: &Mesh, show_map: bool, weights: &[MixWeight]) {
+    if show_map {
+        for (color, &weight) in mesh.color.iter_mut().zip(weights) {
+            *color = map_color(weight);
+        }
+    } else {
+        mesh.color.clone_from(&a.color);
+    }
+}
+
 type PaintChange = Vec<(u32, MixWeight)>;
 
 struct PaintStroke {
@@ -58,6 +152,7 @@ pub(crate) struct OxyMorph {
     topology: u64,
     mix: f32,
     preview: Option<MixPreview>,
+    compare: Option<ComparePane>,
     weights: Vec<MixWeight>,
     brush: Option<MixBrush>,
     radius: f32,
@@ -81,6 +176,7 @@ impl OxyMorph {
         if self.b != b {
             self.b = b;
             self.preview = None;
+            self.compare = None;
             self.weights.fill(MixWeight::default());
             self.stroke = None;
             self.undo.clear();
@@ -131,6 +227,7 @@ impl Editor {
             topology: piece.mesh.topology_version(),
             mix: 0.5,
             preview: None,
+            compare: None,
             weights: vec![MixWeight::default(); piece.mesh.vertex_count()],
             brush: None,
             radius: 48.0,
@@ -145,6 +242,8 @@ impl Editor {
     fn oxymorph_busy(&self) -> bool {
         self.job.is_some()
             || self.tube.is_some()
+            || self.tube_armed
+            || self.select_curve.is_some()
             || self.spheres.is_some()
             || self.curve.is_some()
             || self.poly_edit.is_some()
@@ -175,8 +274,12 @@ impl Editor {
         // vertex order when its bounds have changed during sculpting.
         let b = variant(name, a, a.mesh.clone());
         let id = b.id;
+        let comparison = state.compare.is_some();
         self.add_piece(b, "Fork OxyMorph variant");
         self.oxymorph.as_mut().expect("fork session").set_variant(Some(id));
+        if comparison {
+            self.apply_pane_canvas();
+        }
         self.status = "OxyMorph B selected. Sculpt B, then preview the mix.".into();
     }
 
@@ -187,17 +290,79 @@ impl Editor {
         (a.id != b.id && state.accepts(a) && state.accepts(b)).then_some((a, b))
     }
 
+    fn oxymorph_ready_pair(&self) -> Option<(&Piece, &Piece)> {
+        let (a, b) = self.oxymorph_inputs()?;
+        let active = self.scene.try_active()?.id;
+        (!self.oxymorph_busy() && (active == a.id || active == b.id)).then_some((a, b))
+    }
+
+    /// Comparison layout and focus do not depend on a preview being up to
+    /// date. A brush can dirty an endpoint between frames.
+    pub(crate) fn oxymorph_comparison(&self) -> Option<(ComparePane, [u64; 2])> {
+        let pane = self.oxymorph.as_ref()?.compare?;
+        let (a, b) = self.oxymorph_ready_pair()?;
+        let pane = if pane == ComparePane::Mix {
+            pane
+        } else if self.scene.active().id == a.id {
+            ComparePane::A
+        } else {
+            ComparePane::B
+        };
+        Some((pane, [a.id, b.id]))
+    }
+
+    pub(crate) fn oxymorph_compare_bounds(&self) -> Option<Aabb> {
+        self.oxymorph_comparison()?;
+        let (a, b) = self.oxymorph_inputs()?;
+        Some(a.mesh.bounds().union(&b.mesh.bounds()))
+    }
+
+    pub(crate) fn oxymorph_focus(&mut self, pane: ComparePane) {
+        let Some((_, pair)) = self.oxymorph_comparison() else { return };
+        if let Some(index) = pane.source(pair).and_then(|id| self.scene.index_of(id)) {
+            self.scene.set_active(index);
+        }
+        self.oxymorph.as_mut().expect("comparison session").compare = Some(pane);
+        self.apply_pane_canvas();
+    }
+
+    pub(crate) fn oxymorph_set_compare(&mut self, enabled: bool) {
+        if enabled && self.oxymorph_ready_pair().is_none() {
+            return;
+        }
+        if self.oxymorph.as_ref().is_none_or(|s| s.compare.is_some() == enabled) {
+            return;
+        }
+        self.pointer_up();
+        self.oxymorph.as_mut().expect("comparison session").compare = enabled.then_some(ComparePane::Mix);
+        self.apply_pane_canvas();
+        if enabled {
+            self.oxymorph_refresh();
+            self.frame_active();
+        }
+    }
+
+    pub(crate) fn oxymorph_mix_focused(&self) -> bool {
+        self.oxymorph_comparison()
+            .map_or_else(|| self.oxymorph_preview_pair().is_some(), |(pane, _)| pane == ComparePane::Mix)
+    }
+
+    pub(crate) fn oxymorph_compare_hit(&self, origin: Vec3, ray: Vec3) -> Option<RayHit> {
+        let (pane, pair) = self.oxymorph_comparison()?;
+        let mesh = match pane.source(pair) {
+            Some(id) => &self.scene.get(id)?.mesh,
+            None => &self.oxymorph.as_ref()?.preview.as_ref()?.mesh,
+        };
+        mesh.raycast(origin, ray)
+    }
+
     /// Only substitute the viewport surface while the cached preview
     /// still describes the current endpoints.
     pub(crate) fn oxymorph_preview_pair(&self) -> Option<[u64; 2]> {
         let state = self.oxymorph.as_ref()?;
         let preview = state.preview.as_ref()?;
-        let (a, b) = self.oxymorph_inputs()?;
-        let pair = [a.id, b.id];
-        (!self.oxymorph_busy()
-            && self.scene.try_active().is_some_and(|p| pair.contains(&p.id))
-            && preview.key == PreviewKey::new(&a.mesh, &b.mesh, state.mix, state.show_map))
-        .then_some(pair)
+        let (a, b) = self.oxymorph_ready_pair()?;
+        (preview.key == PreviewKey::new(&a.mesh, &b.mesh, state.mix, state.show_map)).then_some([a.id, b.id])
     }
 
     pub(crate) fn oxymorph_show_map(&self) -> bool {
@@ -206,6 +371,12 @@ impl Editor {
 
     pub(crate) fn oxymorph_preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
         self.oxymorph.as_mut()?.preview.as_mut().map(|p| &mut p.mesh)
+    }
+
+    pub(crate) fn oxymorph_refresh_comparison(&mut self) {
+        if self.oxymorph_comparison().is_some() {
+            self.oxymorph_refresh();
+        }
     }
 
     pub(crate) fn oxymorph_refresh(&mut self) {
@@ -228,21 +399,16 @@ impl Editor {
             state.preview = None;
             return;
         };
-        let (mut mesh, recolor) = match state.preview.take() {
-            Some(preview) if preview.key.a == key.a => (preview.mesh, preview.key.show_map != key.show_map),
-            _ => (a.mesh.clone(), key.show_map),
-        };
-        mesh.replace_positions(positions);
-        if recolor {
+        if let Some(preview) = state.preview.as_mut().filter(|p| p.key.a[1] == key.a[1]) {
+            preview.refresh(key, &a.mesh, positions, &state.weights);
+        } else {
+            let mut mesh = a.mesh.clone();
             if state.show_map {
-                for (color, &weight) in mesh.color.iter_mut().zip(&state.weights) {
-                    *color = map_color(weight);
-                }
-            } else {
-                mesh.color.clone_from(&a.mesh.color);
+                set_preview_colors(&mut mesh, &a.mesh, state.show_map, &state.weights);
             }
+            mesh.replace_positions(positions);
+            state.preview = Some(MixPreview { key, mesh });
         }
-        state.preview = Some(MixPreview { key, mesh });
     }
 
     pub(crate) fn oxymorph_brush(&self) -> Option<(MixBrush, f32, egui::Color32)> {
@@ -264,6 +430,9 @@ impl Editor {
         }
         let (origin, ray) = self.camera.ray(local, size);
         let hit = self.oxymorph.as_ref()?.preview.as_ref()?.mesh.raycast(origin, ray)?;
+        if self.oxymorph_comparison().is_some() {
+            return Some(hit);
+        }
         let occluded = self.scene.pieces.iter().any(|piece| {
             piece.visible
                 && !pair.contains(&piece.id)
@@ -273,8 +442,9 @@ impl Editor {
     }
 
     pub(crate) fn oxymorph_paint_start(&mut self, pos: Vec2) -> bool {
-        let Some(pair) = self.oxymorph_preview_pair() else { return false };
         let Some((brush, _, _)) = self.oxymorph_brush() else { return false };
+        self.oxymorph_refresh_comparison();
+        let Some(pair) = self.oxymorph_preview_pair() else { return false };
         let Some(hit) = self.oxymorph_pick(pos, pair) else { return false };
         self.oxymorph.as_mut().expect("visible OxyMorph preview").stroke =
             Some(PaintStroke { brush, last: Some(pos), sampled: HashMap::new() });
@@ -369,9 +539,10 @@ impl Editor {
         }
     }
 
-    pub(crate) fn oxymorph_history_step(&mut self, redo: bool) -> bool {
+    pub(crate) fn oxymorph_history_step(&mut self, redo: bool) {
+        self.oxymorph_refresh_comparison();
         if self.oxymorph_preview_pair().is_none() {
-            return false;
+            return;
         }
         self.pointer_up();
         let state = self.oxymorph.as_mut().expect("OxyMorph paint session");
@@ -388,11 +559,12 @@ impl Editor {
             }
             self.status = if redo { "Redid OxyMorph paint stroke" } else { "Undid OxyMorph paint stroke" }.into();
         }
-        true
     }
 
     pub(crate) fn oxymorph_can_history(&self, redo: bool) -> Option<bool> {
-        self.oxymorph_preview_pair()?;
+        if !self.oxymorph_mix_focused() {
+            return None;
+        }
         let state = self.oxymorph.as_ref()?;
         Some(if redo { !state.redo.is_empty() } else { !state.undo.is_empty() })
     }
@@ -401,11 +573,13 @@ impl Editor {
         if self.oxymorph_busy() || self.oxymorph.as_ref().is_none_or(|s| s.preview.is_none()) {
             return;
         }
+        self.pointer_up();
         self.oxymorph_refresh();
         let Some([a, _]) = self.oxymorph_preview_pair() else {
             self.status = "The OxyMorph inputs changed. Preview the mix again before creating a piece.".into();
             return;
         };
+        let comparison = self.oxymorph_comparison().is_some();
         let doc = &mut self.documents[self.active_document];
         let src = doc.scene.get(a).expect("validated OxyMorph source");
         let name = doc.scene.unique_name(&format!("{} mix", src.name));
@@ -420,6 +594,9 @@ impl Editor {
             Piece { symmetry_center, material, ..Piece::new(name.clone(), preview.mesh) },
             "Create OxyMorph mix",
         );
+        if comparison {
+            self.apply_pane_canvas();
+        }
         self.status = format!("Created {name}");
     }
 }
@@ -441,17 +618,24 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
     let mut strength = state.strength;
     let mut show_map = state.show_map;
     let mut show_mix = state.preview.is_some();
+    let mut compare = state.compare.is_some();
     let mut open = true;
     let mut action = None;
     let ready_a = ed.scene.get(a).is_some_and(|p| state.accepts(p));
     let ready_b = b.is_some_and(|id| ed.scene.get(id).is_some_and(|p| state.accepts(p)));
     let active_in_pair = ed.scene.try_active().is_some_and(|p| p.id == a || Some(p.id) == b);
     let idle = !ed.oxymorph_busy();
-    show_mix &= ready_a && ready_b && active_in_pair && idle;
+    let ready = ready_a && ready_b && active_in_pair && idle;
+    show_mix &= ready;
+    compare &= ready;
 
-    egui::Window::new("OxyMorph")
+    let comparing = compare;
+    let panel_id = if comparing { "oxymorph_comparison_panel" } else { "oxymorph_panel" };
+    let offset = if comparing { 345.0 } else { 610.0 };
+    egui::Window::new("OxyMorph (Beta)")
+        .id(egui::Id::unique(panel_id))
         .open(&mut open)
-        .default_pos([ctx.content_rect().right() - 610.0, 120.0])
+        .default_pos([ctx.content_rect().right() - offset, 120.0])
         .default_width(285.0)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -494,10 +678,10 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.weak("Use Solo in Pieces when the variants overlap.");
             }
             ui.separator();
-            ui.add_enabled(
-                ready_a && ready_b && active_in_pair && idle,
-                egui::Checkbox::new(&mut show_mix, "Preview mix"),
-            );
+            ui.add_enabled(ready, egui::Checkbox::new(&mut compare, "Compare A / Mix / B"))
+                .on_hover_text("Sculpt A and B in the outer panes. Paint the mix in the center.");
+            show_mix |= compare;
+            ui.add_enabled(ready && !compare, egui::Checkbox::new(&mut show_mix, "Preview mix"));
             if show_mix {
                 ui.add(egui::Slider::new(&mut mix, 0.0..=1.0).text("Mix (A to B)"));
                 ui.horizontal(|ui| {
@@ -536,11 +720,13 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
     if !open {
         ed.pointer_up();
         ed.oxymorph = None;
+        ed.apply_pane_canvas();
         return;
     }
     let state = ed.oxymorph.as_mut().expect("open OxyMorph window");
     if state.b != b {
         show_mix = false;
+        compare = false;
         state.set_variant(b);
     }
     if !show_mix {
@@ -554,10 +740,14 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
     if show_mix {
         ed.oxymorph_refresh();
     }
+    ed.oxymorph_set_compare(compare);
+    ed.apply_pane_canvas();
     match action {
         Some(Action::Fork) => ed.oxymorph_fork(),
         Some(Action::Select(id)) => {
-            if let Some(index) = ed.scene.index_of(id) {
+            if compare {
+                ed.oxymorph_focus(if id == a { ComparePane::A } else { ComparePane::B });
+            } else if let Some(index) = ed.scene.index_of(id) {
                 ed.scene.set_active(index);
                 ed.oxymorph.as_mut().expect("open OxyMorph window").preview = None;
             }
@@ -576,6 +766,21 @@ mod tests {
     use crate::editor::{Drag, PointerButton};
     use glam::{Vec2, Vec3};
     use oxy_doc::Scene;
+
+    #[test]
+    fn comparison_panes_cover_the_canvas_with_two_gaps() {
+        let canvas = [40.0, 60.0, 803.0, 520.0];
+        let [a, mix, b] = ComparePane::ALL.map(|pane| pane.rect(canvas));
+        assert_eq!(a[0], canvas[0]);
+        assert_eq!(mix[0], a[0] + a[2] + crate::split_view::DIVIDER_PX);
+        assert_eq!(b[0], mix[0] + mix[2] + crate::split_view::DIVIDER_PX);
+        assert_eq!(b[0] + b[2], canvas[0] + canvas[2]);
+        for pane in ComparePane::ALL {
+            let [x, y, w, h] = pane.rect(canvas);
+            assert_eq!(ComparePane::at(canvas, Vec2::new(x + w / 2.0, y + h / 2.0)), Some(pane));
+        }
+        assert_eq!(ComparePane::at(canvas, Vec2::new(mix[0] - 1.0, 100.0)), None);
+    }
 
     fn fork() -> (Editor, u64, u64) {
         let mut ed = Editor::default();
