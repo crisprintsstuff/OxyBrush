@@ -87,7 +87,7 @@ struct PostUniforms {
 struct PieceUniforms {
     flags: [f32; 4],
     /// x: matcap layer (0 the scene's), y: inactive look (see
-    /// [`InactiveLook::code`]), z: its strength.
+    /// [`InactiveLook::code`]), z: its strength, w: show diagnostic color map.
     material: [f32; 4],
     /// The Tint look's color (linear), w unused.
     inactive_color: [f32; 4],
@@ -414,6 +414,9 @@ pub struct DrawItem {
     /// the edited piece's polygons this way, hidden where the surface is
     /// in front of them).
     pub wireframe: bool,
+    /// Display vertex colors as a diagnostic map on this item, independent
+    /// of the viewport's paint, face-group and mask visibility settings.
+    pub color_map: bool,
 }
 
 /// Opacity of a piece's edges shown with [`DrawItem::wireframe`] while the
@@ -1722,7 +1725,7 @@ impl ViewportRenderer {
                     item.material.min(MATERIAL_SLOTS) as f32,
                     settings.inactive_look.code(),
                     settings.inactive_strength.clamp(0.0, 1.0),
-                    0.0,
+                    if item.color_map { 1.0 } else { 0.0 },
                 ];
                 let c = settings.inactive_color.map(|v| v.clamp(0.0, 1.0).powf(2.2));
                 let inactive_color = [c[0], c[1], c[2], 0.0];

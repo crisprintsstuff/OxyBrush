@@ -42,7 +42,15 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     }
     viewport.set_instances(&device, &queue, 1, &[Mat4::IDENTITY]);
     let camera = Camera::default();
-    let item = DrawItem { id: 1, active: true, preview: false, material: 0, instances: None, wireframe: false };
+    let item = DrawItem {
+        id: 1,
+        active: true,
+        preview: false,
+        material: 0,
+        instances: None,
+        wireframe: false,
+        color_map: false,
+    };
     let rear = DrawItem { id: 2, active: false, ..item };
     let settings = ViewSettings { ambient_occlusion: 0.0, cavity: 0.0, ..Default::default() };
     let mut render = |settings: &ViewSettings, items: &[DrawItem], plane: Option<ReferencePlane>| -> Vec<u8> {

@@ -7,6 +7,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 
 - **OxyMorph.** Fork an editable variant, preview the global blend of two matched shapes, and create an undoable result piece. [RFC 0056](docs/rfcs/0056-sculpt-variants.md)
+- **OxyMorph paint.** Use **Keep A** and **Keep B** to pin areas of the preview and **Erase** to give those areas back to the mix slider. See pins in the paint map and undo a paint stroke at a time. [RFC 0056](docs/rfcs/0056-sculpt-variants.md)
 
 ### Fixed
 

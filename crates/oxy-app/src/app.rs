@@ -838,6 +838,7 @@ impl App {
         // applied: draw it in the piece's place, looking like the piece.
         let curve_piece = ed.preview_in_place();
         let morph_pair = ed.oxymorph_preview_pair();
+        let morph_map = morph_pair.is_some() && ed.oxymorph_show_map();
         // While another piece is edited, pieces with levels are drawn at
         // their lowest level (Lighter inactive pieces), from a copy kept on
         // the GPU under its own id next to the full mesh, so switching back
@@ -925,6 +926,7 @@ impl App {
                     material,
                     instances: None,
                     wireframe: Some(p.id) == poly_wire,
+                    color_map: false,
                 });
             }
         }
@@ -952,6 +954,7 @@ impl App {
                 material: slot_of(d.source),
                 instances: Some(d.key),
                 wireframe: false,
+                color_map: false,
             });
         }
         self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
@@ -973,6 +976,7 @@ impl App {
                 material,
                 instances: None,
                 wireframe: force_preview_wire,
+                color_map: morph_map,
             });
         }
 
