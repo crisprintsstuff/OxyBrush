@@ -1,6 +1,6 @@
 # RFC 0058 — Transmissive viewport materials
 
-- **Status:** Viewport presets and thickness-based tint implemented
+- **Status:** Viewport presets, thickness-based tint, and opt-in exit refraction implemented
 - **Scope:** Clear Glass and Frosted Glass for individual sculpt pieces.
 
 ## Workflow
@@ -10,7 +10,9 @@ Glass** or **Frosted Glass**. Adjust tint, roughness, and refraction while watch
 the model, then apply the settings in one Undo step. For colored glass, raise
 **Absorption** to make thick areas take on a deeper tint while thin edges stay
 clearer. At zero, the tint is uniform. Reseeding changes the fine 3D frost
-pattern. Projects save these settings with each piece.
+pattern. Turn on **Exit refraction** for glass with a closed surface. It
+changes how flat panes and curved lenses bend the background. The setting
+starts off and is saved with each piece.
 
 ## Rendering
 
@@ -28,17 +30,28 @@ of path length times Absorption using Beer–Lambert attenuation. A missing
 or invalid exit and instanced copies use uniform tint. White tint transmits
 the same color at all thicknesses.
 
-This is a real-time approximation for the nearest glass surface. It samples
-visible opaque geometry and reference backgrounds. Back-face refraction,
-nested shells, caustics, and material export remain follow-up work.
-Existing `glass:1` keys open with zero Absorption. New `glass:2` keys carry
-the additional value. Older readers that do not recognize the key fall back
-to the scene material.
+Exit refraction adds view-space normals to the same back-face pass. A short
+screen-space search intersects the inside ray with the far surface, then bends
+the ray into air using the opposite index ratio. Absorption uses the traced
+path length when available. Opaque scene depth supplies a backdrop distance,
+and reference images use an estimated distance. Unreliable or missing exits,
+surface instances, and rays that cannot reach the screen-space backdrop keep the
+entry-only preview. Total internal reflection uses the existing studio
+reflection. One closed shell per piece gives the most reliable result.
+
+The preview samples visible opaque geometry and reference backgrounds. Nested
+shells, multiple internal bounces, caustics, and material export remain
+follow-up work. Existing `glass:1` and `glass:2` keys open with Exit refraction
+off. A `glass:3` key enables it. Readers that lack support for the version use
+the scene material.
 
 ## Acceptance
 
 - The checkerboard behind a sculpt bends through Clear Glass and has softer
   edges through Frosted Glass when the view moves.
+- A thin pane with parallel faces preserves the checkerboard more closely
+  with Exit refraction enabled. A rounded piece still bends it, and frosting
+  softens the image through the piece.
 - Opaque geometry hides glass behind it. Other pieces retain their materials.
 - With colored tint and absorption enabled, the center of a rounded piece
   absorbs more light than its thin rim. An overlapping glass piece does not
@@ -53,3 +66,4 @@ to the scene material.
 - [Blender Noise Texture manual](https://docs.blender.org/manual/en/5.0/render/shader_nodes/textures/noise.html)
 - [Nomad material guide, Refraction](https://nomadsculpt.com/manual/material#refraction)
 - [Khronos KHR_materials_volume, Attenuation](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_volume#attenuation)
+- [Physically Based Rendering, fourth edition, Specular Reflection and Transmission](https://pbr-book.org/4ed/Reflection_Models/Specular_Reflection_and_Transmission)

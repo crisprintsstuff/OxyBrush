@@ -37,6 +37,7 @@
 //!   `preset:KEY`, `custom:NAME`, or
 //!   `glass:1:R:G:B:ROUGHNESS:IOR:SEED` for uniform tint or
 //!   `glass:2:R:G:B:ROUGHNESS:IOR:SEED:ABSORPTION` for thickness-based tint.
+//!   Version 3 has the same fields as version 2 and enables exit refraction.
 //!   Glass RGB channels are sRGB bytes, and SEED is zero for smooth glass
 //!   or the frost seed plus one.
 //!   Readers fall back to the scene's matcap for unfamiliar keys.

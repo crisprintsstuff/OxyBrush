@@ -14993,6 +14993,7 @@ mod tests {
             ior: 1.62,
             frost_seed: Some(42),
             absorption: 1.25,
+            exit_refraction: true,
             ..GlassMaterial::FROSTED
         };
         let preset = GlassMaterial::FROSTED.key();

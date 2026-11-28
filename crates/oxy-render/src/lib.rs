@@ -80,7 +80,7 @@ struct PostUniforms {
     proj: [f32; 4],
     /// Viewport rectangle in framebuffer pixels.
     viewport: [f32; 4],
-    /// Obscurance strength, cavity strength, obscurance radius (world), unused.
+    /// Obscurance strength, cavity strength, obscurance radius (world), camera distance.
     params: [f32; 4],
 }
 
@@ -95,7 +95,7 @@ struct PieceUniforms {
     inactive_color: [f32; 4],
     /// Linear glass tint and index of refraction.
     glass_tint: [f32; 4],
-    /// Roughness and optional procedural frost seed.
+    /// Roughness, encoded frost seed, absorption, and exit refraction.
     glass_surface: [f32; 4],
 }
 
@@ -501,6 +501,7 @@ pub struct ViewportRenderer {
     glass_pipeline: wgpu::RenderPipeline,
     glass_pipeline_instanced: wgpu::RenderPipeline,
     glass_back_pipeline: wgpu::RenderPipeline,
+    glass_exit_pipeline: wgpu::RenderPipeline,
     wireframe_pipeline_instanced: wgpu::RenderPipeline,
     shadow_pipeline_instanced: wgpu::RenderPipeline,
     background_pipeline: wgpu::RenderPipeline,
@@ -588,7 +589,8 @@ struct ShadingTargets {
 }
 
 struct GlassBackTargets {
-    linear_depth: wgpu::TextureView,
+    surfaces: wgpu::TextureView,
+    has_normals: bool,
     depth_test: wgpu::TextureView,
     group: wgpu::BindGroup,
 }
@@ -810,6 +812,7 @@ impl ViewportRenderer {
             let (targets, cull_mode) = match fragment {
                 "fs_glass" => (&mesh_targets[..1], None),
                 "fs_glass_back" => (&glass_back_targets[..], Some(wgpu::Face::Front)),
+                "fs_glass_exit" => (&mesh_targets[1..], Some(wgpu::Face::Front)),
                 _ => (&mesh_targets[..], None),
             };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -990,6 +993,7 @@ impl ViewportRenderer {
             immediate_size: 0,
         });
         let glass_back_pipeline = make_pipeline("vs_glass_back", "fs_glass_back", false, &pipeline_layout);
+        let glass_exit_pipeline = make_pipeline("vs_glass_exit", "fs_glass_exit", false, &pipeline_layout);
         let glass_pipeline = make_pipeline("vs_main", "fs_glass", false, &glass_layout);
         let glass_pipeline_instanced = make_pipeline("vs_main_instanced", "fs_glass", true, &glass_layout);
         let post_pipeline = |label, entry, format, blend| {
@@ -1144,6 +1148,7 @@ impl ViewportRenderer {
             glass_pipeline,
             glass_pipeline_instanced,
             glass_back_pipeline,
+            glass_exit_pipeline,
             wireframe_pipeline_instanced,
             shadow_pipeline_instanced,
             background_pipeline,
@@ -1634,9 +1639,9 @@ impl ViewportRenderer {
         })
     }
 
-    fn ensure_glass_back(&mut self, device: &wgpu::Device) {
+    fn ensure_glass_back(&mut self, device: &wgpu::Device, needs_normals: bool) {
         let t = self.targets.as_ref().expect("ensured");
-        if t.glass_back.is_some() {
+        if t.glass_back.as_ref().is_some_and(|back| back.has_normals || !needs_normals) {
             return;
         }
         let (width, height) = t.size;
@@ -1654,11 +1659,15 @@ impl ViewportRenderer {
                 })
                 .create_view(&Default::default())
         };
-        let linear_depth =
-            make("oxy glass exit depth", wgpu::TextureFormat::R32Float, wgpu::TextureUsages::TEXTURE_BINDING);
-        let depth_test = make("oxy glass exit depth test", DEPTH_FORMAT, wgpu::TextureUsages::empty());
-        let group = self.post_group(device, &t.color, &t.normal_depth, &linear_depth);
-        self.targets.as_mut().expect("ensured").glass_back = Some(GlassBackTargets { linear_depth, depth_test, group });
+        let format = if needs_normals { NORMAL_DEPTH_FORMAT } else { wgpu::TextureFormat::R32Float };
+        let surfaces = make("oxy glass back surfaces", format, wgpu::TextureUsages::TEXTURE_BINDING);
+        let depth_test = t.glass_back.as_ref().map_or_else(
+            || make("oxy glass exit depth test", DEPTH_FORMAT, wgpu::TextureUsages::empty()),
+            |back| back.depth_test.clone(),
+        );
+        let group = self.post_group(device, &t.color, &t.normal_depth, &surfaces);
+        self.targets.as_mut().expect("ensured").glass_back =
+            Some(GlassBackTargets { surfaces, has_normals: needs_normals, depth_test, group });
     }
 
     fn draw_meshes<'p>(
@@ -1778,12 +1787,6 @@ impl ViewportRenderer {
             lighting: gpu_lighting,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
-        let absorption = |item: &DrawItem| {
-            // One back-depth image cannot pair overlapping instances with their own front surfaces.
-            item.glass
-                .filter(|glass| item.instances.is_none() && glass.tint != [255; 3])
-                .map_or(0.0, |glass| glass.absorption)
-        };
         let multiple = items.len() > 1;
         for item in items {
             if let Some(gpu) = self.meshes.get(&item.id) {
@@ -1815,7 +1818,7 @@ impl ViewportRenderer {
                 let c = settings.inactive_color.map(|v| v.clamp(0.0, 1.0).powf(2.2));
                 let inactive_color = [c[0], c[1], c[2], 0.0];
                 let (glass_tint, glass_surface) =
-                    item.glass.map_or(([0.0; 4], [0.0; 4]), |glass| glass.uniforms(absorption(item)));
+                    item.glass.map_or(([0.0; 4], [0.0; 4]), |glass| glass.uniforms(item.instances.is_some()));
                 queue.write_buffer(
                     &gpu.piece_uniforms,
                     0,
@@ -1837,17 +1840,25 @@ impl ViewportRenderer {
             viewport: [x, y, vw, vh],
             // The obscurance radius follows the camera distance, so it picks
             // up broad forms when zoomed out and fine detail when zoomed in.
-            params: [shading[0], shading[1], camera.distance * 0.035, 0.0],
+            params: [shading[0], shading[1], camera.distance * 0.035, camera.distance],
         };
         queue.write_buffer(&self.post_uniforms, 0, bytemuck::bytes_of(&post));
         self.ensure_targets(device, target_size.0.max(1), target_size.1.max(1));
         let ghosted = |item: &DrawItem| settings.xray && settings.xray_scope.includes(item);
         let refractive = |item: &DrawItem| item.glass.is_some() && !item.color_map && !ghosted(item);
-        let absorbing = |item: &DrawItem| refractive(item) && absorption(item) > 0.0;
-        let uniform_glass = |item: &DrawItem| refractive(item) && absorption(item) == 0.0;
-        let draw_absorption = items.iter().any(absorbing);
-        if draw_absorption {
-            self.ensure_glass_back(device);
+        // A shared image cannot pair overlapping instances with their own back faces.
+        let back_faces = |item: &DrawItem| {
+            item.instances.is_none() && item.glass.is_some_and(|glass| glass.absorbs() || glass.uses_exit_refraction())
+        };
+        let draw_back_faces = items.iter().any(|item| refractive(item) && back_faces(item));
+        let simple_glass = |item: &DrawItem| refractive(item) && !back_faces(item);
+        if draw_back_faces {
+            let needs_normals = items.iter().any(|item| {
+                refractive(item)
+                    && item.instances.is_none()
+                    && item.glass.is_some_and(GlassMaterial::uses_exit_refraction)
+            });
+            self.ensure_glass_back(device, needs_normals);
         }
         let t = self.targets.as_ref().expect("ensured");
 
@@ -1996,7 +2007,7 @@ impl ViewportRenderer {
                             view: depth,
                             depth_ops: Some(wgpu::Operations {
                                 load: wgpu::LoadOp::Load,
-                                store: if draw_xray || draw_absorption {
+                                store: if draw_xray || draw_back_faces {
                                     wgpu::StoreOp::Store
                                 } else {
                                     wgpu::StoreOp::Discard
@@ -2013,20 +2024,21 @@ impl ViewportRenderer {
                     pass.set_bind_group(2, back.map_or(&t.ao_group, |back| &back.group), &[]);
                     self.draw_meshes(
                         &mut pass,
-                        batch.iter().filter(|item| back.is_some() || uniform_glass(item)),
+                        batch.iter().filter(|item| back.is_some() || simple_glass(item)),
                         glass_pipelines,
                     );
                 };
-            if items.iter().any(uniform_glass) {
+            if items.iter().any(simple_glass) {
                 draw_fronts(encoder, items, None);
             }
             if let Some(back) = &t.glass_back {
-                for item in items.iter().filter(|item| absorbing(item)) {
+                let pipeline = if back.has_normals { &self.glass_exit_pipeline } else { &self.glass_back_pipeline };
+                for item in items.iter().filter(|item| refractive(item) && back_faces(item)) {
                     {
                         // Keep this item's backfaces separate from all other glass pieces.
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("oxy glass backfaces"),
-                            color_attachments: &[attachment(&back.linear_depth, transparent)],
+                            color_attachments: &[attachment(&back.surfaces, transparent)],
                             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                                 view: &back.depth_test,
                                 depth_ops: Some(wgpu::Operations {
@@ -2041,7 +2053,7 @@ impl ViewportRenderer {
                         });
                         pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
                         pass.set_bind_group(0, &self.bind_group, &[]);
-                        self.draw_meshes(&mut pass, std::iter::once(item), [&self.glass_back_pipeline; 2]);
+                        self.draw_meshes(&mut pass, std::iter::once(item), [pipeline; 2]);
                     }
                     draw_fronts(encoder, std::slice::from_ref(item), Some(back));
                 }

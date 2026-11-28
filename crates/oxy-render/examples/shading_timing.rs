@@ -84,6 +84,7 @@ fn main() {
         ("plain", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
         ("clear glass", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
         ("absorbing glass", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
+        ("exit refraction", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
         ("frosted glass", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
         ("plain with X-ray", 0.0, 0.0, oxy_render::lighting::Lighting::default(), true),
         ("cavity only", 0.0, 0.6, oxy_render::lighting::Lighting::default(), false),
@@ -102,6 +103,9 @@ fn main() {
         let glass = match label {
             "clear glass" => Some(GlassMaterial { tint: [100, 200, 255], ..GlassMaterial::CLEAR }),
             "absorbing glass" => Some(GlassMaterial { tint: [100, 200, 255], absorption: 1.0, ..GlassMaterial::CLEAR }),
+            "exit refraction" => {
+                Some(GlassMaterial { tint: [100, 200, 255], exit_refraction: true, ..GlassMaterial::CLEAR })
+            }
             "frosted glass" => Some(GlassMaterial::FROSTED),
             _ => None,
         };

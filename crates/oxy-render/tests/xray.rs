@@ -50,6 +50,10 @@ fn xray_and_glass_respect_opaque_depth() {
         vec![[0, 1, 2], [0, 2, 3]],
     );
     viewport.sync(&device, &queue, 4, &mut open, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, false);
+    let mut pane = oxy_mesh::primitives::cube(1, 2.0);
+    let tilt = glam::Quat::from_rotation_y(40.0_f32.to_radians());
+    pane.replace_positions(pane.positions.iter().map(|p| tilt * (*p * Vec3::new(1.2, 1.1, 0.02))).collect());
+    viewport.sync(&device, &queue, 5, &mut pane, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, false);
     viewport.set_instances(&device, &queue, 1, &[Mat4::IDENTITY]);
     let camera = Camera::default();
     let item = DrawItem {
@@ -260,4 +264,47 @@ fn xray_and_glass_respect_opaque_depth() {
     assert_eq!(open_uniform, open_thickness, "an open sheet falls back to uniform tint");
     let instance = render(&settings, &[DrawItem { instances: Some(1), ..absorbing }], Some(white()));
     assert_eq!(instance, uniform, "instances fall back to uniform tint");
+
+    let exit_clear = GlassMaterial { exit_refraction: true, ..GlassMaterial::CLEAR };
+    let exit_frost = GlassMaterial { exit_refraction: true, ..GlassMaterial::FROSTED };
+    let sphere_exit = DrawItem { glass: Some(exit_clear), ..item };
+    let lens = render(&settings, &[sphere_exit], Some(board()));
+    let frosted_lens = render(&settings, &[DrawItem { glass: Some(exit_frost), ..item }], Some(board()));
+    assert_ne!(lens, plain);
+    assert_ne!(lens, clear);
+    assert!(gradient(&frosted_lens) < gradient(&lens));
+    assert_eq!(sample(&plain, 5, 5), sample(&lens, 5, 5));
+    let flat_lens = render(&settings, &[DrawItem { id: 4, ..sphere_exit }], Some(board()));
+    let flat_entry = render(&settings, &[DrawItem { id: 4, glass: Some(GlassMaterial::CLEAR), ..item }], Some(board()));
+    assert_eq!(flat_lens, flat_entry, "an open surface lacks an exit");
+    let instanced_lens = render(&settings, &[DrawItem { instances: Some(1), ..sphere_exit }], Some(board()));
+    assert_eq!(instanced_lens, clear);
+
+    // Parallel sides reverse the change in angle. A slab this thin should
+    // shift the checkerboard by much less than the single-entry effect.
+    let pane_error = |frame: &[u8], baseline: &[u8]| {
+        (23..41)
+            .flat_map(|y| (23..41).map(move |x| u32::from(sample(frame, x, y)[0].abs_diff(sample(baseline, x, y)[0]))))
+            .sum::<u32>()
+    };
+    let pane_entry = DrawItem { id: 5, glass: Some(GlassMaterial::CLEAR), ..item };
+    let pane_exit = DrawItem { glass: Some(exit_clear), ..pane_entry };
+    for projection in [camera, orthographic] {
+        let mut render_pane = |items: &[DrawItem]| {
+            next_view.set(Some((target, projection)));
+            render(&settings, items, Some(board()))
+        };
+        let board = render_pane(&[]);
+        let entry_error = pane_error(&render_pane(&[pane_entry]), &board);
+        let exit_error = pane_error(&render_pane(&[pane_exit]), &board);
+        assert!(exit_error * 2 < entry_error, "entry error {entry_error}, exit error {exit_error}");
+    }
+
+    let hidden_lens = render(&settings, &[item, DrawItem { id: 2, ..sphere_exit }], Some(board()));
+    assert_eq!(center(&hidden_lens), center(&solid));
+    let rear_lens = DrawItem { id: 2, ..sphere_exit };
+    for items in [[rear_lens, sphere_exit], [sphere_exit, rear_lens]] {
+        let overlapping = render(&settings, &items, Some(board()));
+        assert_eq!(center(&overlapping), center(&lens));
+    }
 }
