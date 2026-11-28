@@ -32,10 +32,12 @@
 //!   0 split in place). Written only when some level isn't smoothed. Older
 //!   readers skip it: the levels' points are the same, only edits on a
 //!   lower level then carry the finer levels along as if they were smooth.
-//! - `MATL` (optional, since 4.0.0-beta.10): the matcap of the
+//! - `MATL` (optional, since 4.0.0-beta.10): the viewport material of the
 //!   **preceding** `PIEC` when it isn't the scene's, as UTF-8 text:
-//!   `preset:KEY` or `custom:NAME`. Older readers skip it and show the piece
-//!   with the scene's matcap.
+//!   `preset:KEY`, `custom:NAME`, or
+//!   `glass:1:R:G:B:ROUGHNESS:IOR:SEED`. Glass RGB channels are sRGB bytes,
+//!   and SEED is zero for smooth glass or the frost seed plus one.
+//!   Readers fall back to the scene's matcap for unfamiliar keys.
 //! - `INST` (optional, since 4.0.0-beta.12): surface instances on the
 //!   **preceding** `PIEC` (RFC 0022): `count:u32` then per instancer
 //!   `source:u32` (the source piece's place among the file's pieces, from

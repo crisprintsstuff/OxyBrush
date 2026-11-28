@@ -6691,9 +6691,16 @@ impl Editor {
         if piece.material == key {
             return;
         }
-        piece.material = key;
+        let glass = piece.material.as_deref().and_then(oxy_render::GlassMaterial::from_key).is_some()
+            || key.as_deref().and_then(oxy_render::GlassMaterial::from_key).is_some();
+        let previous = std::mem::replace(&mut piece.material, key);
+        let id = piece.id;
         let name = piece.name.clone();
-        self.pieces_unsaved = true;
+        if glass {
+            self.history.record("Change glass material", Step::Material { piece: id, previous });
+        } else {
+            self.pieces_unsaved = true;
+        }
         self.status = match self.scene.active().material.clone() {
             Some(k) => format!("{name} now shows {}", self.material_name(&k)),
             None => format!("{name} shows the scene's material again"),
@@ -6702,6 +6709,9 @@ impl Editor {
 
     /// A readable name for a material key.
     pub fn material_name(&self, key: &str) -> String {
+        if let Some(glass) = oxy_render::GlassMaterial::from_key(key) {
+            return glass.label().to_owned();
+        }
         match self.resolve_material(key) {
             Some(Ok(m)) => m.label().to_owned(),
             _ => key.strip_prefix("custom:").unwrap_or(key).to_owned(),
@@ -14971,6 +14981,27 @@ mod tests {
         e.max_triangles = before.triangle_count() + 10;
         e.subdivide_masked();
         assert!(e.status.contains("limit"), "{}", e.status);
+    }
+
+    #[test]
+    fn glass_is_undoable_and_saved_on_the_piece() {
+        use oxy_render::GlassMaterial;
+
+        let mut e = editor();
+        let glass = GlassMaterial { tint: [220, 240, 255], ior: 1.62, frost_seed: Some(42), ..GlassMaterial::FROSTED };
+        let key = glass.key();
+        e.set_piece_material(Some(key.clone()));
+        assert!(e.is_modified());
+        assert_eq!(e.material_name(&key), "Frosted Glass");
+        let saved = format::decode(&format::encode(&e.scene_data())).unwrap();
+        assert_eq!(saved.pieces[0].material.as_deref().and_then(GlassMaterial::from_key), Some(glass));
+        e.undo();
+        assert!(e.scene.active().material.is_none());
+        e.redo();
+        assert_eq!(e.scene.active().material.as_deref(), Some(key.as_str()));
+        e.set_piece_material(None);
+        e.undo();
+        assert_eq!(e.scene.active().material.as_deref(), Some(key.as_str()));
     }
 
     #[test]

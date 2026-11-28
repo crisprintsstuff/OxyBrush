@@ -58,6 +58,8 @@ struct Piece {
     material: vec4<f32>,
     // rgb: the Tint look's color (linear)
     inactive_color: vec4<f32>,
+    glass_tint: vec4<f32>,
+    glass_surface: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -631,4 +633,91 @@ fn fs_floor(i: FloorOut) -> FsOut {
     out.color = vec4<f32>(line, a);
     out.normal_depth = vec4<f32>(0.0);
     return out;
+}
+
+// Glass samples the opaque pass. The bindings share the existing post layout.
+struct GlassViewport {
+    proj: vec4<f32>,
+    rect: vec4<f32>,
+    params: vec4<f32>,
+};
+@group(2) @binding(0) var<uniform> glass_view: GlassViewport;
+@group(2) @binding(1) var glass_scene: texture_2d<f32>;
+@group(2) @binding(2) var glass_scene_depth: texture_2d<f32>;
+
+fn glass_behind(pixel: vec2<f32>, fallback: vec2<f32>, depth: f32) -> vec3<f32> {
+    let lo = glass_view.rect.xy;
+    let hi = lo + glass_view.rect.zw - vec2<f32>(1.0);
+    let sample_px = vec2<i32>(clamp(pixel, lo, hi));
+    let background_depth = textureLoad(glass_scene_depth, sample_px, 0).w;
+    // An offset ray must never bring a foreground opaque piece inside the glass.
+    let obstructed = background_depth > 0.0 && background_depth < depth - 0.001;
+    let base_px = vec2<i32>(clamp(fallback, lo, hi));
+    return textureLoad(glass_scene, select(sample_px, base_px, obstructed), 0).rgb;
+}
+
+fn frost_cell(position: vec3<f32>, seed: f32) -> f32 {
+    let cell = vec3<i32>(floor(position));
+    let f = smoothstep(vec3<f32>(0.0), vec3<f32>(1.0), fract(position));
+    var value = 0.0;
+    for (var z = 0; z < 2; z++) {
+        for (var y = 0; y < 2; y++) {
+            for (var x = 0; x < 2; x++) {
+                let corner = vec3<i32>(x, y, z);
+                let p = bitcast<vec3<u32>>(cell + corner);
+                var h = p.x * 73856093u ^ p.y * 19349663u ^ p.z * 83492791u ^ u32(seed) * 2654435761u;
+                h = (h ^ (h >> 16u)) * 2246822519u;
+                h = (h ^ (h >> 13u)) * 3266489917u;
+                let random = f32((h ^ (h >> 16u)) & 65535u) / 65535.0;
+                let w = mix(vec3<f32>(1.0) - f, f, vec3<f32>(corner));
+                value += random * w.x * w.y * w.z;
+            }
+        }
+    }
+    return value;
+}
+
+const FROST_TAPS = array(
+    vec2<f32>(1.0, 0.0), vec2<f32>(0.7071, 0.7071),
+    vec2<f32>(0.0, 1.0), vec2<f32>(-0.7071, 0.7071),
+    vec2<f32>(-1.0, 0.0), vec2<f32>(-0.7071, -0.7071),
+    vec2<f32>(0.0, -1.0), vec2<f32>(0.7071, -0.7071),
+);
+
+// Dielectric Fresnel (Schlick approximation), a single entry refraction
+// and a screen-space footprint. Multiple bounces and offscreen objects
+// require a different renderer.
+@fragment
+fn fs_glass(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let n = normalize(select(-i.view_normal, i.view_normal, front));
+    let view = select(normalize(-i.view_pos), vec3<f32>(0.0, 0.0, 1.0), glass_view.proj.z > 0.5);
+    let ior = piece.glass_tint.w;
+    let ray = refract(-view, n, 1.0 / ior);
+    let slope = ray.xy / max(abs(ray.z), 0.25) + view.xy / max(abs(view.z), 0.25);
+    let shift = clamp(slope * vec2<f32>(1.0, -1.0), vec2<f32>(-0.8), vec2<f32>(0.8));
+    let screen = i.clip.xy + shift * glass_view.rect.w * 0.22;
+    var roughness = piece.glass_surface.x;
+    if (piece.glass_surface.y > 0.0) {
+        let noise = frost_cell(i.world_pos * 22.0, piece.glass_surface.y);
+        roughness = clamp(roughness * (0.65 + 0.7 * noise), 0.0, 1.0);
+    }
+    let radius = roughness * roughness * glass_view.rect.w * 0.045;
+    var transmitted = glass_behind(screen, i.clip.xy, i.view_depth) * 2.0;
+    if (radius >= 0.5) {
+        for (var k = 0; k < 8; k++) {
+            transmitted += glass_behind(screen + FROST_TAPS[k] * radius, i.clip.xy, i.view_depth);
+        }
+        transmitted *= 0.1;
+    } else {
+        transmitted *= 0.5;
+    }
+    let f = (ior - 1.0) / (ior + 1.0);
+    let facing = clamp(dot(view, n), 0.0, 1.0);
+    let reflection = select(0.0, f * f + (1.0 - f * f) * pow(1.0 - facing, 5.0), ior > 1.001);
+    let reflected = reflect(-view, n);
+    let studio = mix(0.16, 0.8, smoothstep(-0.45, 0.65, reflected.y));
+    let key = pow(max(dot(reflected, normalize(vec3<f32>(-0.35, 0.55, 0.65))), 0.0), mix(110.0, 8.0, roughness));
+    var color = mix(transmitted * piece.glass_tint.rgb, vec3<f32>(studio + key), reflection);
+    color = mix(color, color * u.mask_color.rgb, clamp(i.mask, 0.0, 1.0) * u.params.y);
+    return vec4<f32>(color, 1.0);
 }

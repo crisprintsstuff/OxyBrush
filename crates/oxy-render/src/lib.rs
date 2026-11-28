@@ -7,6 +7,7 @@
 //! (hidden triangles are left out of the index buffer).
 
 mod camera;
+mod glass;
 mod hard_edges;
 pub mod lighting;
 mod reference;
@@ -17,6 +18,7 @@ pub use camera::{
     Camera, DEFAULT_FOV_Y, FOCAL_MM_MAX, FOCAL_MM_MIN, FOCAL_PRESETS_MM, clamp_focal_mm, default_focal_mm,
     fov_y_from_focal_mm, quantize_focal_mm, wrap_signed_pi,
 };
+pub use glass::GlassMaterial;
 pub use hard_edges::DEFAULT_SPLIT_ANGLE_DEG;
 pub use matcap::MatcapPreset;
 
@@ -91,6 +93,10 @@ struct PieceUniforms {
     material: [f32; 4],
     /// The Tint look's color (linear), w unused.
     inactive_color: [f32; 4],
+    /// Linear glass tint and index of refraction.
+    glass_tint: [f32; 4],
+    /// Roughness and optional procedural frost seed.
+    glass_surface: [f32; 4],
 }
 
 /// How pieces other than the active one are shown when there are several
@@ -417,6 +423,7 @@ pub struct DrawItem {
     /// Display vertex colors as a diagnostic map on this item, independent
     /// of the viewport's paint, face-group and mask visibility settings.
     pub color_map: bool,
+    pub glass: Option<GlassMaterial>,
 }
 
 /// Opacity of a piece's edges shown with [`DrawItem::wireframe`] while the
@@ -491,6 +498,8 @@ pub struct ViewportRenderer {
     /// The same three for instanced items (surface instances), so ordinary
     /// pieces keep their vertex shader exactly as it was.
     pipeline_instanced: wgpu::RenderPipeline,
+    glass_pipeline: wgpu::RenderPipeline,
+    glass_pipeline_instanced: wgpu::RenderPipeline,
     wireframe_pipeline_instanced: wgpu::RenderPipeline,
     shadow_pipeline_instanced: wgpu::RenderPipeline,
     background_pipeline: wgpu::RenderPipeline,
@@ -776,10 +785,18 @@ impl ViewportRenderer {
             }),
             Some(instance_layout()),
         ];
-        let make_pipeline = |entry: &'static str, instanced: bool| {
+        let mesh_targets = [
+            Some(wgpu::ColorTargetState { format: color_format, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+            Some(wgpu::ColorTargetState {
+                format: NORMAL_DEPTH_FORMAT,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            }),
+        ];
+        let make_pipeline = |entry: &'static str, fragment, instanced: bool, layout: &wgpu::PipelineLayout| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("oxy viewport pipeline"),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some(entry),
@@ -801,27 +818,16 @@ impl ViewportRenderer {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(fragment),
                     compilation_options: Default::default(),
-                    targets: &[
-                        Some(wgpu::ColorTargetState {
-                            format: color_format,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        }),
-                        Some(wgpu::ColorTargetState {
-                            format: NORMAL_DEPTH_FORMAT,
-                            blend: None,
-                            write_mask: wgpu::ColorWrites::ALL,
-                        }),
-                    ],
+                    targets: if fragment == "fs_glass" { &mesh_targets[..1] } else { &mesh_targets },
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let pipeline = make_pipeline("vs_main", false);
-        let pipeline_instanced = make_pipeline("vs_main_instanced", true);
+        let pipeline = make_pipeline("vs_main", "fs_main", false, &pipeline_layout);
+        let pipeline_instanced = make_pipeline("vs_main_instanced", "fs_main", true, &pipeline_layout);
 
         // Floor grid: a quad drawn after the pieces, blended over the color
         // target and depth-tested (not written), so the model hides it. It
@@ -960,6 +966,13 @@ impl ViewportRenderer {
             bind_group_layouts: &[Some(&post_layout)],
             immediate_size: 0,
         });
+        let glass_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("oxy glass pipeline layout"),
+            bind_group_layouts: &[Some(&layout), Some(&piece_layout), Some(&post_layout)],
+            immediate_size: 0,
+        });
+        let glass_pipeline = make_pipeline("vs_main", "fs_glass", false, &glass_layout);
+        let glass_pipeline_instanced = make_pipeline("vs_main_instanced", "fs_glass", true, &glass_layout);
         let post_pipeline = |label, entry, format, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -1109,6 +1122,8 @@ impl ViewportRenderer {
             pipeline,
             wireframe_pipeline,
             pipeline_instanced,
+            glass_pipeline,
+            glass_pipeline_instanced,
             wireframe_pipeline_instanced,
             shadow_pipeline_instanced,
             background_pipeline,
@@ -1585,16 +1600,19 @@ impl ViewportRenderer {
             Some(ShadingTargets { size: (width, height), color, normal_depth, ao, ao_group, composite_group });
     }
 
-    fn draw_meshes<'p>(&'p self, pass: &mut wgpu::RenderPass<'p>, items: impl Iterator<Item = &'p DrawItem>) {
+    fn draw_meshes<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        items: impl Iterator<Item = &'p DrawItem>,
+        pipelines: [&'p wgpu::RenderPipeline; 2],
+    ) {
         let mut instanced = None;
         for item in items {
             let Some(gpu) = self.meshes.get(&item.id) else { continue };
             if gpu.total_index_count == 0 {
                 continue;
             }
-            let Some(count) =
-                self.bind_instances(pass, item, &mut instanced, [&self.pipeline, &self.pipeline_instanced])
-            else {
+            let Some(count) = self.bind_instances(pass, item, &mut instanced, pipelines) else {
                 continue;
             };
             pass.set_vertex_buffer(0, gpu.vertices.slice(..));
@@ -1729,10 +1747,11 @@ impl ViewportRenderer {
                 ];
                 let c = settings.inactive_color.map(|v| v.clamp(0.0, 1.0).powf(2.2));
                 let inactive_color = [c[0], c[1], c[2], 0.0];
+                let (glass_tint, glass_surface) = item.glass.map_or(([0.0; 4], [0.0; 4]), GlassMaterial::uniforms);
                 queue.write_buffer(
                     &gpu.piece_uniforms,
                     0,
-                    bytemuck::bytes_of(&PieceUniforms { flags, material, inactive_color }),
+                    bytemuck::bytes_of(&PieceUniforms { flags, material, inactive_color, glass_tint, glass_surface }),
                 );
             }
         }
@@ -1770,9 +1789,12 @@ impl ViewportRenderer {
         let output_load = if clear { wgpu::LoadOp::Clear(bg) } else { wgpu::LoadOp::Load };
         let transparent = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let ghosted = |item: &DrawItem| settings.xray && settings.xray_scope.includes(item);
-        let opaque = || items.iter().filter(|item| !ghosted(item));
+        let refractive = |item: &DrawItem| item.glass.is_some() && !item.color_map && !ghosted(item);
+        let opaque = || items.iter().filter(|item| !ghosted(item) && !refractive(item));
         let opacity = f64::from(settings.xray_opacity.clamp(0.0, 1.0));
         let draw_xray = opacity > 0.0 && items.iter().any(ghosted);
+        let draw_glass = items.iter().any(refractive);
+        let mesh_pipelines = [&self.pipeline, &self.pipeline_instanced];
         let all_wires = settings.wireframe && settings.wireframe_opacity > 0.001;
         // 0. Shadow maps: the opaque pieces, depth only, from each light.
         for (i, _) in shadows.iter().enumerate() {
@@ -1818,20 +1840,21 @@ impl ViewportRenderer {
         let has_opaque = opaque().next().is_some();
         let draw_ao = has_opaque && shading[0] > 0.0;
         let shaded = draw_ao || (has_opaque && shading[1] > 0.0);
-        let scene_color = if shaded { &t.color } else { target };
+        let offscreen = shaded || draw_glass;
+        let scene_color = if offscreen { &t.color } else { target };
         {
             // 1. Matcap shading into the color + normal/depth targets.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy viewport pass"),
                 color_attachments: &[
-                    attachment(scene_color, if shaded { wgpu::LoadOp::Clear(bg) } else { output_load }),
+                    attachment(scene_color, if offscreen { wgpu::LoadOp::Clear(bg) } else { output_load }),
                     attachment(&t.normal_depth, transparent),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: if draw_xray { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
+                        store: if draw_xray || draw_glass { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
                     }),
                     stencil_ops: None,
                 }),
@@ -1850,7 +1873,7 @@ impl ViewportRenderer {
             }
             self.references.draw(&mut pass, false);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            self.draw_meshes(&mut pass, opaque());
+            self.draw_meshes(&mut pass, opaque(), mesh_pipelines);
             if !behind && settings.floor.is_some() {
                 // After the pieces, so the model hides the grid behind it.
                 pass.set_pipeline(&self.floor_pipeline);
@@ -1873,7 +1896,7 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &t.ao_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        if shaded {
+        if offscreen {
             // 3. Blur + cavity + composite into the window.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy composite pass"),
@@ -1887,6 +1910,31 @@ impl ViewportRenderer {
             pass.set_pipeline(&self.composite_pipeline);
             pass.set_bind_group(0, if draw_ao { &t.composite_group } else { &t.ao_group }, &[]);
             pass.draw(0..3, 0..1);
+        }
+        if draw_glass {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxy glass"),
+                color_attachments: &[attachment(target, wgpu::LoadOp::Load)],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: if draw_xray { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(2, &t.ao_group, &[]);
+            self.draw_meshes(
+                &mut pass,
+                items.iter().filter(|item| refractive(item)),
+                [&self.glass_pipeline, &self.glass_pipeline_instanced],
+            );
         }
         if draw_xray {
             // The opaque pass has finished reading the scratch textures. Reuse them
@@ -1906,7 +1954,7 @@ impl ViewportRenderer {
                 });
                 pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
                 pass.set_bind_group(0, &self.bind_group, &[]);
-                self.draw_meshes(&mut pass, items.iter().filter(|item| ghosted(item)));
+                self.draw_meshes(&mut pass, items.iter().filter(|item| ghosted(item)), mesh_pipelines);
                 self.draw_wires(&mut pass, items.iter().filter(|item| ghosted(item)), all_wires);
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
