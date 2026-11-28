@@ -2,15 +2,14 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::editor::Editor;
+use crate::{document::Document, editor::Editor};
 use glam::{Vec2, Vec3};
-use oxy_doc::Piece;
+use oxy_doc::{MORPH_MAX_TRIANGLES, MorphCamera, MorphView, Piece, SavedMorph};
 use oxy_mesh::{
     Aabb, Mesh, RayHit,
-    morph::{MixBrush, MixWeight, blend_positions, surface_dab},
+    morph::{MixBrush, MixWeight, blend_matched_positions, blend_positions, matches_topology, surface_dab},
 };
 
-const MAX_TRIANGLES: usize = 200_000;
 const MAX_PAINT_STROKES: usize = 32;
 const KEEP_A: [u8; 3] = [66, 156, 245];
 const KEEP_B: [u8; 3] = [248, 146, 62];
@@ -137,6 +136,7 @@ fn set_preview_colors(mesh: &mut Mesh, a: &Mesh, show_map: bool, weights: &[MixW
 }
 
 type PaintChange = Vec<(u32, MixWeight)>;
+type SavedControls = (u64, MorphView, Option<MixBrush>, [f32; 3], bool);
 
 struct PaintStroke {
     brush: MixBrush,
@@ -150,6 +150,7 @@ pub(crate) struct OxyMorph {
     a: u64,
     b: Option<u64>,
     topology: u64,
+    correspondence: Option<(u64, Vec<u32>)>,
     mix: f32,
     preview: Option<MixPreview>,
     compare: Option<ComparePane>,
@@ -165,7 +166,73 @@ pub(crate) struct OxyMorph {
 
 impl OxyMorph {
     fn accepts(&self, piece: &Piece) -> bool {
-        piece.spheres.is_none() && piece.link.is_none() && piece.mesh.topology_version() == self.topology
+        let topology = match &self.correspondence {
+            Some((topology, _)) if self.b == Some(piece.id) => *topology,
+            _ => self.topology,
+        };
+        piece.spheres.is_none() && piece.link.is_none() && piece.mesh.topology_version() == topology
+    }
+
+    fn b_vertex(&self, vertex: usize) -> usize {
+        self.correspondence.as_ref().map_or(vertex, |(_, vertices)| vertices[vertex] as usize)
+    }
+
+    fn view(&self) -> MorphView {
+        match self.compare {
+            Some(ComparePane::A) => MorphView::CompareA,
+            Some(ComparePane::Mix) => MorphView::CompareMix,
+            Some(ComparePane::B) => MorphView::CompareB,
+            None if self.preview.is_some() => MorphView::Preview,
+            None => MorphView::Sources,
+        }
+    }
+
+    fn controls(&self) -> Option<SavedControls> {
+        Some((self.b?, self.view(), self.brush, [self.mix, self.radius, self.strength], self.show_map))
+    }
+
+    pub(crate) fn saved(&self, doc: &Document) -> Option<SavedMorph> {
+        let ai = doc.scene.index_of(self.a)?;
+        let bi = doc.scene.index_of(self.b?)?;
+        let a = &doc.scene.pieces[ai];
+        let b = &doc.scene.pieces[bi];
+        if ai == bi || !self.accepts(a) || !self.accepts(b) {
+            return None;
+        }
+        let a_order = saved_order(a);
+        let b_order = saved_order(b);
+        let mut vertices = vec![(0, MixWeight::default()); self.weights.len()];
+        for (v, (&saved_a, &pins)) in a_order.iter().zip(&self.weights).enumerate() {
+            *vertices.get_mut(saved_a as usize)? = (*b_order.get(self.b_vertex(v))?, pins);
+        }
+        let view = match doc.scene.try_active().map(|p| p.id) {
+            Some(active) if active == a.id || active == b.id => match self.view() {
+                MorphView::CompareA | MorphView::CompareB if active == a.id => MorphView::CompareA,
+                MorphView::CompareA | MorphView::CompareB => MorphView::CompareB,
+                view => view,
+            },
+            _ => MorphView::Sources,
+        };
+        let c = doc.camera;
+        Some(SavedMorph {
+            a: ai as u32,
+            b: bi as u32,
+            mix: self.mix,
+            view,
+            show_map: self.show_map,
+            brush: self.brush,
+            radius: self.radius,
+            strength: self.strength,
+            camera: MorphCamera {
+                target: c.target,
+                distance: c.distance,
+                yaw: c.yaw,
+                pitch: c.pitch,
+                fov_y: c.fov_y,
+                orthographic: c.orthographic,
+            },
+            vertices,
+        })
     }
 
     pub(crate) fn set_brush(&mut self, brush: Option<MixBrush>) {
@@ -175,6 +242,7 @@ impl OxyMorph {
     fn set_variant(&mut self, b: Option<u64>) {
         if self.b != b {
             self.b = b;
+            self.correspondence = None;
             self.preview = None;
             self.compare = None;
             self.weights.fill(MixWeight::default());
@@ -190,7 +258,8 @@ impl OxyMorph {
         for &vertex in changed {
             let v = vertex as usize;
             let weight = self.weights[v];
-            preview.mesh.positions[v] = weight.position(a.positions[v], b.positions[v], self.mix);
+            let matched = self.correspondence.as_ref().map_or(v, |(_, vertices)| vertices[v] as usize);
+            preview.mesh.positions[v] = weight.position(a.positions[v], b.positions[matched], self.mix);
             if self.show_map {
                 preview.mesh.color[v] = map_color(weight);
             }
@@ -199,12 +268,73 @@ impl OxyMorph {
     }
 }
 
+/// PieceData saves ordinary meshes in their current order and subdivision
+/// stacks in level order.
+fn saved_order(piece: &Piece) -> Vec<u32> {
+    piece
+        .multires
+        .as_ref()
+        .map_or_else(|| (0..piece.mesh.vertex_count() as u32).collect(), |levels| levels.level_indices(&piece.mesh))
+}
+
 /// A regular sculptable piece using the displayed mesh and its material.
 fn variant(name: String, src: &Piece, mesh: Mesh) -> Piece {
     Piece { symmetry_center: src.symmetry_center, material: src.material.clone(), ..Piece::new(name, mesh) }
 }
 
 impl Editor {
+    pub(crate) fn oxymorph_reopen(&mut self, saved: Option<SavedMorph>) -> bool {
+        let Some(saved) = saved else { return true };
+        let Some((a, b, vertices, weights)) = reopen_correspondence(&self.scene, &saved) else {
+            log::warn!("the saved OxyMorph session did not match its source pieces");
+            return false;
+        };
+        let compare = match saved.view {
+            MorphView::CompareA => Some(ComparePane::A),
+            MorphView::CompareMix => Some(ComparePane::Mix),
+            MorphView::CompareB => Some(ComparePane::B),
+            _ => None,
+        };
+        let pair = [a.id, b.id];
+        self.oxymorph = Some(OxyMorph {
+            a: a.id,
+            b: Some(b.id),
+            topology: a.mesh.topology_version(),
+            correspondence: Some((b.mesh.topology_version(), vertices)),
+            mix: saved.mix,
+            preview: None,
+            compare,
+            weights,
+            brush: saved.brush,
+            radius: saved.radius,
+            strength: saved.strength,
+            show_map: saved.show_map,
+            stroke: None,
+            undo: VecDeque::new(),
+            redo: Vec::new(),
+        });
+        let c = saved.camera;
+        self.camera = oxy_render::Camera {
+            target: c.target,
+            distance: c.distance,
+            yaw: c.yaw,
+            pitch: c.pitch,
+            fov_y: c.fov_y,
+            orthographic: c.orthographic,
+        };
+        if saved.view != MorphView::Sources {
+            let active = compare
+                .and_then(|pane| pane.source(pair))
+                .or_else(|| (!self.scene.try_active().is_some_and(|p| pair.contains(&p.id))).then_some(pair[0]));
+            if let Some(index) = active.and_then(|id| self.scene.index_of(id)) {
+                self.scene.set_active(index);
+            }
+            self.oxymorph_refresh();
+            self.apply_pane_canvas();
+        }
+        true
+    }
+
     pub(crate) fn oxymorph_open(&mut self) {
         if self.oxymorph.is_some() {
             return;
@@ -217,14 +347,15 @@ impl Editor {
             self.status = "OxyMorph needs a sculptable mesh piece".into();
             return;
         }
-        if piece.mesh.triangle_count() > MAX_TRIANGLES {
-            self.status = format!("OxyMorph supports up to {MAX_TRIANGLES} triangles at the displayed level");
+        if piece.mesh.triangle_count() > MORPH_MAX_TRIANGLES {
+            self.status = format!("OxyMorph supports up to {MORPH_MAX_TRIANGLES} triangles at the displayed level");
             return;
         }
         self.oxymorph = Some(OxyMorph {
             a: piece.id,
             b: None,
             topology: piece.mesh.topology_version(),
+            correspondence: None,
             mix: 0.5,
             preview: None,
             compare: None,
@@ -318,11 +449,14 @@ impl Editor {
     }
 
     pub(crate) fn oxymorph_focus(&mut self, pane: ComparePane) {
-        let Some((_, pair)) = self.oxymorph_comparison() else { return };
+        let Some((previous, pair)) = self.oxymorph_comparison() else { return };
         if let Some(index) = pane.source(pair).and_then(|id| self.scene.index_of(id)) {
             self.scene.set_active(index);
         }
         self.oxymorph.as_mut().expect("comparison session").compare = Some(pane);
+        if previous != pane {
+            self.mark_morph_changed();
+        }
         self.apply_pane_canvas();
     }
 
@@ -335,6 +469,7 @@ impl Editor {
         }
         self.pointer_up();
         self.oxymorph.as_mut().expect("comparison session").compare = enabled.then_some(ComparePane::Mix);
+        self.mark_morph_changed();
         self.apply_pane_canvas();
         if enabled {
             self.oxymorph_refresh();
@@ -395,7 +530,12 @@ impl Editor {
         if state.preview.as_ref().is_some_and(|p| p.key == key) {
             return;
         }
-        let Some(positions) = blend_positions(&a.mesh, &b.mesh, mix, &state.weights) else {
+        let positions = if let Some((_, vertices)) = &state.correspondence {
+            Some(blend_matched_positions(&a.mesh, &b.mesh, mix, &state.weights, vertices))
+        } else {
+            blend_positions(&a.mesh, &b.mesh, mix, &state.weights)
+        };
+        let Some(positions) = positions else {
             state.preview = None;
             return;
         };
@@ -521,6 +661,7 @@ impl Editor {
             }
             state.undo.push_back(changed);
             state.redo.clear();
+            self.mark_morph_changed();
         }
         if let Some(mesh) = self.oxymorph_preview_mesh_mut() {
             mesh.tighten_bounds();
@@ -558,6 +699,7 @@ impl Editor {
                 state.redo.push(entries)
             }
             self.status = if redo { "Redid OxyMorph paint stroke" } else { "Undid OxyMorph paint stroke" }.into();
+            self.mark_morph_changed();
         }
     }
 
@@ -601,6 +743,45 @@ impl Editor {
     }
 }
 
+/// Older geometry is rebuilt for locality, so neither loaded runtime
+/// numbering is necessarily its saved numbering.
+fn reopen_correspondence<'a>(
+    scene: &'a oxy_doc::Scene,
+    saved: &SavedMorph,
+) -> Option<(&'a Piece, &'a Piece, Vec<u32>, Vec<MixWeight>)> {
+    let a = scene.pieces.get(saved.a as usize)?;
+    let b = scene.pieces.get(saved.b as usize)?;
+    let n = a.mesh.vertex_count();
+    if a.id == b.id
+        || [a, b].into_iter().any(|p| {
+            p.spheres.is_some()
+                || p.link.is_some()
+                || p.mesh.triangle_count() == 0
+                || p.mesh.triangle_count() > MORPH_MAX_TRIANGLES
+                || p.mesh.vertex_count() != n
+        })
+        || saved.vertices.len() != n
+    {
+        return None;
+    }
+    let mut runtime_b = vec![u32::MAX; n];
+    for (v, &saved_v) in b.mesh.source_vertices().iter().enumerate() {
+        *runtime_b.get_mut(saved_v as usize)? = v as u32;
+    }
+    let (vertices, weights): (Vec<_>, Vec<_>) = a
+        .mesh
+        .source_vertices()
+        .iter()
+        .map(|&v| {
+            let (b, weight) = *saved.vertices.get(v as usize)?;
+            Some((*runtime_b.get(b as usize)?, weight))
+        })
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .unzip();
+    matches_topology(&a.mesh, &b.mesh, &vertices).then_some((a, b, vertices, weights))
+}
+
 enum Action {
     Fork,
     Select(u64),
@@ -610,6 +791,7 @@ enum Action {
 
 pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
     let Some(state) = &ed.oxymorph else { return };
+    let previous = state.controls();
     let a = state.a;
     let mut b = state.b;
     let mut mix = state.mix;
@@ -720,6 +902,9 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
     if !open {
         ed.pointer_up();
         ed.oxymorph = None;
+        if previous.is_some() {
+            ed.mark_morph_changed();
+        }
         ed.apply_pane_canvas();
         return;
     }
@@ -757,6 +942,9 @@ pub(crate) fn window(ctx: &egui::Context, ed: &mut Editor) {
             ed.oxymorph_history_step(redo);
         }
         None => {}
+    }
+    if previous != ed.oxymorph.as_ref().and_then(OxyMorph::controls) {
+        ed.mark_morph_changed();
     }
 }
 

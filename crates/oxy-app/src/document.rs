@@ -37,6 +37,8 @@ pub struct Document {
     pub saved_revision: u64,
     /// History revision at the last autosave.
     pub autosaved_revision: u64,
+    pub(crate) morph_unsaved: bool,
+    pub(crate) morph_autosave_pending: bool,
     /// Dedicated autosave file for this tab (`autosave-<pid>-<id>.oxb`).
     pub autosave_path: Option<PathBuf>,
 
@@ -217,6 +219,8 @@ impl Document {
             path: None,
             saved_revision: 0,
             autosaved_revision: 0,
+            morph_unsaved: false,
+            morph_autosave_pending: false,
             autosave_path: None,
             scene,
             history: History::default(),
@@ -374,6 +378,13 @@ impl Document {
 
     /// Whether this document has changes since the last save.
     pub fn is_dirty(&self) -> bool {
-        self.history.revision() != self.saved_revision || self.alphas_unsaved || self.pieces_unsaved
+        self.history.revision() != self.saved_revision
+            || self.alphas_unsaved
+            || self.pieces_unsaved
+            || self.morph_unsaved
+    }
+
+    pub(crate) fn needs_autosave(&self) -> bool {
+        self.is_dirty() && (self.history.revision() != self.autosaved_revision || self.morph_autosave_pending)
     }
 }

@@ -803,6 +803,46 @@ pub struct SceneData {
     /// from an image), in the order they appear in the alpha list.
     pub alphas: Vec<AlphaData>,
     pub references: Vec<ReferenceImage>,
+    pub oxymorph: Option<SavedMorph>,
+}
+
+/// An unfinished OxyMorph mix, indexed by the saved pieces and their
+/// on-disk vertex order. See the optional `OMPH` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedMorph {
+    pub a: u32,
+    pub b: u32,
+    pub mix: f32,
+    pub view: MorphView,
+    pub show_map: bool,
+    pub brush: Option<oxy_mesh::morph::MixBrush>,
+    pub radius: f32,
+    pub strength: f32,
+    pub camera: MorphCamera,
+    /// Indexed by A's saved vertices. Each entry holds B's saved vertex
+    /// index and the two keep weights for this vertex.
+    pub vertices: Vec<(u32, oxy_mesh::morph::MixWeight)>,
+}
+
+pub const MORPH_MAX_TRIANGLES: usize = 200_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MorphView {
+    Sources,
+    Preview,
+    CompareA,
+    CompareMix,
+    CompareB,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MorphCamera {
+    pub target: Vec3,
+    pub distance: f32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub fov_y: f32,
+    pub orthographic: bool,
 }
 
 /// A brush alpha saved in a project: `size`² values, row-major, row 0 at
@@ -1004,7 +1044,13 @@ impl Scene {
                 })
                 .collect();
         }
-        SceneData { pieces, active: self.active_index(), alphas: Vec::new(), references: self.references.clone() }
+        SceneData {
+            pieces,
+            active: self.active_index(),
+            alphas: Vec::new(),
+            references: self.references.clone(),
+            oxymorph: None,
+        }
     }
 
     /// An empty piece list is an empty scene (File > New > Empty scene).

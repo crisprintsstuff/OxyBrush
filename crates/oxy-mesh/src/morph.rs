@@ -22,6 +22,10 @@ pub struct MixWeight {
 }
 
 impl MixWeight {
+    pub fn from_pins([a, b]: [f32; 2]) -> Option<Self> {
+        ((0.0..=1.0).contains(&a) && (0.0..=1.0).contains(&b) && a + b <= 1.0 + f32::EPSILON).then_some(Self { a, b })
+    }
+
     pub fn paint(self, brush: MixBrush, amount: f32) -> Self {
         if !amount.is_finite() {
             return self;
@@ -68,6 +72,47 @@ pub fn blend_positions(a: &Mesh, b: &Mesh, mix: f32, weights: &[MixWeight]) -> O
             .map(|((&a, &b), &weight)| weight.position(a, b, mix))
             .collect(),
     )
+}
+
+/// Match vertices after loading, when each mesh may have been reordered
+/// independently. Check the bijection and oriented faces before using it.
+pub fn matches_topology(a: &Mesh, b: &Mesh, vertices: &[u32]) -> bool {
+    if a.triangle_count() != b.triangle_count()
+        || a.vertex_count() != b.vertex_count()
+        || a.vertex_count() != vertices.len()
+    {
+        return false;
+    }
+    let mut seen = vec![false; vertices.len()];
+    for &index in vertices {
+        if seen.get_mut(index as usize).is_none_or(|used| std::mem::replace(used, true)) {
+            return false;
+        }
+    }
+    let rotate = |[a, b, c]: [u32; 3]| {
+        if a < b && a < c {
+            [a, b, c]
+        } else if b < c {
+            [b, c, a]
+        } else {
+            [c, a, b]
+        }
+    };
+    let mut expected: Vec<_> = a.triangles.iter().map(|t| rotate(t.map(|v| vertices[v as usize]))).collect();
+    let mut actual: Vec<_> = b.triangles.iter().copied().map(rotate).collect();
+    expected.par_sort_unstable();
+    actual.par_sort_unstable();
+    expected == actual
+}
+
+/// Evaluate with a correspondence that was checked by `matches_topology`.
+pub fn blend_matched_positions(a: &Mesh, b: &Mesh, mix: f32, weights: &[MixWeight], vertices: &[u32]) -> Vec<Vec3> {
+    a.positions
+        .par_iter()
+        .zip(weights)
+        .zip(vertices)
+        .map(|((&a, &weight), &v)| weight.position(a, b.positions[v as usize], mix))
+        .collect()
 }
 
 #[derive(Clone, Copy, PartialEq)]

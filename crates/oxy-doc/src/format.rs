@@ -103,6 +103,8 @@
 //!   and bits 5–6 hold horizontal and vertical flips. Earlier readers ignore
 //!   those bits.
 //! - `RROT` (optional): f32 fine rotation in radians for the immediately preceding REFI.
+//! - `OMPH` (optional): OxyMorph source indices, saved vertex correspondence,
+//!   keep weights, paint settings, and comparison view.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -501,6 +503,10 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
     }
 
+    if let Some(morph) = &scene.oxymorph {
+        sections.push((*b"OMPH", encode_morph(morph)));
+    }
+
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&VERSION.to_le_bytes());
@@ -665,6 +671,115 @@ fn truncated() -> Error {
     Error::Corrupt("unexpected end of data".into())
 }
 
+// OMPH v1: version, view, paint-map flag, brush (u8 each); A and B
+// piece indices (u32); mix, radius, strength (f32); target xyz, distance,
+// yaw, pitch, fov (f32); orthographic (u8); vertex count (u32)
+// followed by B's vertex index and two f32 pins per saved vertex of A.
+const MORPH_HEADER_BYTES: usize = 57;
+const MORPH_VERTEX_BYTES: usize = 12;
+const MAX_MORPH_VERTICES: usize = crate::MORPH_MAX_TRIANGLES * 3;
+
+fn encode_morph(morph: &crate::SavedMorph) -> Vec<u8> {
+    use crate::MorphView;
+    use oxy_mesh::morph::MixBrush;
+    let view = match morph.view {
+        MorphView::Sources => 0,
+        MorphView::Preview => 1,
+        MorphView::CompareA => 2,
+        MorphView::CompareMix => 3,
+        MorphView::CompareB => 4,
+    };
+    let brush = match morph.brush {
+        None => 0,
+        Some(MixBrush::KeepA) => 1,
+        Some(MixBrush::KeepB) => 2,
+        Some(MixBrush::Erase) => 3,
+    };
+    let mut raw = vec![1, view, u8::from(morph.show_map), brush];
+    raw.extend_from_slice(&morph.a.to_le_bytes());
+    raw.extend_from_slice(&morph.b.to_le_bytes());
+    for value in [morph.mix, morph.radius, morph.strength] {
+        raw.extend_from_slice(&value.to_le_bytes());
+    }
+    let c = morph.camera;
+    for value in c.target.to_array().into_iter().chain([c.distance, c.yaw, c.pitch, c.fov_y]) {
+        raw.extend_from_slice(&value.to_le_bytes());
+    }
+    raw.push(u8::from(c.orthographic));
+    raw.extend_from_slice(&(morph.vertices.len() as u32).to_le_bytes());
+    for &(vertex, weight) in &morph.vertices {
+        raw.extend_from_slice(&vertex.to_le_bytes());
+        for pin in weight.pins() {
+            raw.extend_from_slice(&pin.to_le_bytes());
+        }
+    }
+    raw
+}
+
+fn decode_morph(raw: &[u8]) -> Option<crate::SavedMorph> {
+    use crate::MorphView;
+    use oxy_mesh::morph::{MixBrush, MixWeight};
+    let mut r = Reader { data: raw, pos: 0 };
+    if r.u8().ok()? != 1 {
+        return None;
+    }
+    let view = match r.u8().ok()? {
+        0 => MorphView::Sources,
+        1 => MorphView::Preview,
+        2 => MorphView::CompareA,
+        3 => MorphView::CompareMix,
+        4 => MorphView::CompareB,
+        _ => return None,
+    };
+    let show_map = match r.u8().ok()? {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    let brush = match r.u8().ok()? {
+        0 => None,
+        1 => Some(MixBrush::KeepA),
+        2 => Some(MixBrush::KeepB),
+        3 => Some(MixBrush::Erase),
+        _ => return None,
+    };
+    let (a, b) = (r.u32().ok()?, r.u32().ok()?);
+    let (mix, radius, strength) = (r.f32().ok()?, r.f32().ok()?, r.f32().ok()?);
+    let camera = crate::MorphCamera {
+        target: Vec3::new(r.f32().ok()?, r.f32().ok()?, r.f32().ok()?),
+        distance: r.f32().ok()?,
+        yaw: r.f32().ok()?,
+        pitch: r.f32().ok()?,
+        fov_y: r.f32().ok()?,
+        orthographic: match r.u8().ok()? {
+            0 => false,
+            1 => true,
+            _ => return None,
+        },
+    };
+    let n = r.u32().ok()? as usize;
+    if a == b
+        || !(0.0..=1.0).contains(&mix)
+        || !(6.0..=240.0).contains(&radius)
+        || !(0.0..=1.0).contains(&strength)
+        || !camera.target.is_finite()
+        || !camera.distance.is_finite()
+        || camera.distance <= 0.0
+        || !camera.yaw.is_finite()
+        || !camera.pitch.is_finite()
+        || !(0.01..3.13).contains(&camera.fov_y)
+        || n == 0
+        || n > MAX_MORPH_VERTICES
+        || r.remaining() != n * MORPH_VERTEX_BYTES
+    {
+        return None;
+    }
+    let vertices = (0..n)
+        .map(|_| Some((r.u32().ok()?, MixWeight::from_pins([r.f32().ok()?, r.f32().ok()?])?)))
+        .collect::<Option<Vec<_>>>()?;
+    Some(crate::SavedMorph { a, b, mix, view, show_map, brush, radius, strength, camera, vertices })
+}
+
 pub fn decode(data: &[u8]) -> Result<SceneData> {
     let mut r = Reader { data, pos: 0 };
     if data.len() < 8 || r.take(8)? != MAGIC {
@@ -685,10 +800,15 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
         let raw_len = r.u64()?;
         let packed_len = r.u64()?;
         let crc = r.u32()?;
-        if raw_len > MAX_SECTION_BYTES {
+        let morph = &tag == b"OMPH";
+        if !morph && raw_len > MAX_SECTION_BYTES {
             return Err(Error::Corrupt("section too large".into()));
         }
         let packed = r.take(usize::try_from(packed_len).map_err(|_| truncated())?)?;
+        if morph && raw_len > (MORPH_HEADER_BYTES + MAX_MORPH_VERTICES * MORPH_VERTEX_BYTES) as u64 {
+            log::warn!("ignoring oversized OxyMorph session");
+            continue;
+        }
         if &tag == b"REFI"
             && (scene.references.len() >= crate::MAX_REFERENCE_IMAGES
                 || raw_len > (crate::MAX_REFERENCE_BYTES - reference_bytes + 2048) as u64)
@@ -696,9 +816,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
             log::warn!("skipping reference image beyond the project image budget");
             continue;
         }
-        let raw = lz4_flex::block::decompress(packed, raw_len as usize)
-            .map_err(|e| Error::Corrupt(format!("decompression failed: {e}")))?;
+        let raw = match lz4_flex::block::decompress(packed, raw_len as usize) {
+            Ok(raw) => raw,
+            Err(_) if morph => {
+                log::warn!("ignoring damaged OxyMorph session");
+                continue;
+            }
+            Err(e) => return Err(Error::Corrupt(format!("decompression failed: {e}"))),
+        };
         if crc32fast::hash(&raw) != crc {
+            if morph {
+                log::warn!("ignoring OxyMorph session with a bad checksum");
+                continue;
+            }
             return Err(Error::Corrupt(format!("checksum mismatch in {} section", String::from_utf8_lossy(&tag))));
         }
         match &tag {
@@ -1105,6 +1235,10 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
+            },
+            b"OMPH" => match decode_morph(&raw) {
+                Some(saved) => scene.oxymorph = Some(saved),
+                None => log::warn!("ignoring unsupported or damaged OxyMorph session"),
             },
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
@@ -2334,6 +2468,47 @@ pub fn load(path: &Path) -> Result<SceneData> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_oxymorph_section_is_optional_and_damage_leaves_pieces_readable() {
+        use crate::{MorphCamera, MorphView, SavedMorph};
+        use oxy_mesh::morph::{MixBrush, MixWeight};
+
+        let mut scene = sample();
+        scene.pieces.push(scene.pieces[0].clone());
+        let n = scene.pieces[0].mesh.positions.len();
+        scene.oxymorph = Some(SavedMorph {
+            a: 0,
+            b: 1,
+            mix: 0.25,
+            view: MorphView::CompareB,
+            show_map: true,
+            brush: Some(MixBrush::KeepB),
+            radius: 63.0,
+            strength: 0.8,
+            camera: MorphCamera {
+                target: Vec3::Y,
+                distance: 4.0,
+                yaw: 0.3,
+                pitch: 0.2,
+                fov_y: 0.75,
+                orthographic: true,
+            },
+            vertices: (0..n).map(|i| (i as u32, MixWeight::from_pins([0.5, 0.25]).unwrap())).collect(),
+        });
+        let bytes = encode(&scene);
+        let good = decode(&bytes).unwrap();
+        assert_eq!(good.oxymorph, scene.oxymorph);
+        let offset = bytes.windows(4).rposition(|bytes| bytes == b"OMPH").unwrap();
+        let mut damage = bytes.clone();
+        damage[offset + 20] ^= 0x80; // checksum
+        let recovered = decode(&damage).unwrap();
+        assert!(recovered.oxymorph.is_none());
+        assert_eq!(recovered.pieces, good.pieces);
+        let mut old = bytes;
+        old[offset..offset + 4].copy_from_slice(b"SKIP");
+        assert!(decode(&old).unwrap().oxymorph.is_none());
+    }
+
     use super::*;
     use oxy_mesh::primitives;
 
@@ -2501,6 +2676,7 @@ mod tests {
             active: 1,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         }
     }
 
@@ -2555,7 +2731,13 @@ mod tests {
         piece.cage = Some(cage);
         // A brush moved a vertex after the last cage edit: the saved cage has it.
         piece.mesh.positions[0].z = 0.25;
-        let data = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() };
+        let data = SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        };
         let bytes = encode(&data);
         assert_eq!(bytes.windows(4).filter(|w| w == b"CAGE").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
@@ -2596,8 +2778,13 @@ mod tests {
         assert_eq!(mesh.triangle_count(), 6);
         let mut piece = Piece::new("Block", mesh);
         piece.cage = Some(cage);
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         let c = loaded.cage.as_ref().expect("cage loaded and linked");
@@ -2623,8 +2810,13 @@ mod tests {
         q.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
         let mut p = Piece::new("Quad", q.build_mesh().unwrap());
         p.cage = Some(q);
-        let bytes =
-            encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![p.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 0);
     }
 
@@ -2681,7 +2873,13 @@ mod tests {
             skin_of: None,
             polygons: None,
         };
-        let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
         let decoded = decode(&bytes).unwrap().pieces.remove(0);
         assert_eq!(decoded.strokes.as_ref().unwrap().groups, vec![group]);
@@ -2745,8 +2943,13 @@ mod tests {
                 .unwrap()
         };
         p.cage = Some(q);
-        let bytes =
-            encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![p.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"CRSE").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         let c = loaded.cage.as_ref().unwrap();
@@ -2786,8 +2989,13 @@ mod tests {
         assert_eq!(expect, [Vec3::new(2.0, 0.0, 0.0), Vec3::new(7.0, 7.0, 7.0)]);
         let mut piece = Piece::new("Retopo", mesh);
         piece.cage = Some(cage);
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PINS").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(pinned_points(loaded.cage.as_ref().unwrap()), expect, "the same points, after relinking");
@@ -2800,8 +3008,13 @@ mod tests {
         // Nothing pinned: no section.
         let mut none = loaded;
         none.cage.as_mut().unwrap().pinned.clear();
-        let bytes =
-            encode(&SceneData { pieces: vec![none.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![none.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PINS").count(), 0);
     }
 
@@ -2915,8 +3128,13 @@ mod tests {
         };
         piece.tubes.push(recipe.clone());
         assert_eq!(piece.tube_recipe(), Some(&recipe));
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TUBE").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe]);
@@ -2959,8 +3177,13 @@ mod tests {
             fingerprint,
         };
         piece.tubes.push(recipe.clone());
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TUBX").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe]);
@@ -3010,8 +3233,13 @@ mod tests {
             fingerprint,
         };
         piece.tubes.push(recipe.clone());
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TUBC").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe]);
@@ -3033,8 +3261,13 @@ mod tests {
         plain.sharp = vec![false; 3];
         let mut p2 = Piece::new("Plain", primitives::cube(1, 1.0));
         p2.tubes.push(plain);
-        let bytes =
-            encode(&SceneData { pieces: vec![p2.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![p2.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert!(!bytes.windows(4).any(|w| w == b"TUBC"));
     }
 
@@ -3071,8 +3304,13 @@ mod tests {
         };
         assert_eq!(recipe.count_section(), 3);
         piece.tubes.push(recipe.clone());
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TUBP").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe]);
@@ -3129,8 +3367,13 @@ mod tests {
         round.profile = None;
         piece.tubes.push(recipe.clone());
         piece.tubes.push(round.clone());
-        let bytes =
-            encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TPRC").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe, round]);
@@ -3146,8 +3389,13 @@ mod tests {
         // A profile without corners writes no section.
         let mut plain = loaded;
         plain.tubes[0].profile.as_mut().unwrap().sharp.clear();
-        let bytes =
-            encode(&SceneData { pieces: vec![plain.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() });
+        let bytes = encode(&SceneData {
+            pieces: vec![plain.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        });
         assert!(!bytes.windows(4).any(|w| w == b"TPRC"));
     }
 
@@ -3253,7 +3501,13 @@ mod tests {
         m = oxy_mesh::Mesh::from_data(d);
         mr.bind(&m);
         let piece = Piece { multires: Some(mr), ..Piece::new("Head", m) };
-        let scene = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() };
+        let scene = SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        };
         let bytes = encode(&scene);
         let back = decode(&bytes).unwrap();
         assert_eq!(back, scene);
@@ -3288,6 +3542,7 @@ mod tests {
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         });
         let mut reopened = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         let stack = reopened.multires.as_mut().unwrap();
@@ -3324,6 +3579,7 @@ mod tests {
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         };
         let bytes = encode(&scene);
         assert_eq!(bytes.windows(4).filter(|w| w == b"MRPT").count(), 1);
@@ -3359,7 +3615,13 @@ mod tests {
         m = oxy_mesh::Mesh::from_data(d);
         mr.bind(&m);
         let piece = Piece { multires: Some(mr), ..Piece::new("Sheet", m) };
-        let scene = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() };
+        let scene = SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        };
         let bytes = encode(&scene);
         assert_eq!(bytes.windows(4).filter(|w| w == b"MRCC").count(), 1);
         assert_eq!(bytes.windows(4).filter(|w| w == b"MRES").count(), 0);
@@ -3414,6 +3676,7 @@ mod tests {
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         };
         let points_at_theirs = |p: &Piece| {
             let map = p.current_origin().expect("origin while topology is unchanged");
@@ -3425,7 +3688,13 @@ mod tests {
         assert!(points_at_theirs(&piece));
 
         // Saved: VMAP is written and round-trips exactly.
-        let saved = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new(), references: Vec::new() };
+        let saved = SceneData {
+            pieces: vec![piece.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+            oxymorph: None,
+        };
         let bytes = encode(&saved);
         assert_eq!(bytes.windows(4).filter(|w| w == b"VMAP").count(), 1);
         let back = decode(&bytes).unwrap();
@@ -3479,6 +3748,7 @@ mod tests {
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         });
         assert_eq!(bytes.windows(4).filter(|w| w == b"MATL").count(), 1);
         let back = decode(&bytes).unwrap();
@@ -3607,7 +3877,8 @@ mod tests {
 
     #[test]
     fn an_empty_scene_saves_and_opens() {
-        let scene = SceneData { pieces: Vec::new(), active: 0, alphas: Vec::new(), references: Vec::new() };
+        let scene =
+            SceneData { pieces: Vec::new(), active: 0, alphas: Vec::new(), references: Vec::new(), oxymorph: None };
         let bytes = encode(&scene);
         let back = decode(&bytes).unwrap();
         assert!(back.pieces.is_empty());

@@ -336,6 +336,7 @@ fn save(pieces: &[Piece], out: &Path, input: &Path, opts: oxy_io::ExportOptions)
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         };
         format::save(&scene, out).map_err(|e| format!("{}: {e}", out.display()))?;
     } else {
@@ -375,6 +376,7 @@ mod tests {
             active: 0,
             alphas: Vec::new(),
             references: Vec::new(),
+            oxymorph: None,
         };
         format::save(&scene, &dir.join("in.oxb")).unwrap();
 
