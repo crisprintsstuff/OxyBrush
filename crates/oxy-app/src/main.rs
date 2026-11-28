@@ -25,6 +25,7 @@ mod links;
 mod living;
 mod living_ui;
 mod matcaps;
+mod menu_dock;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod menu_model;
 #[cfg(target_os = "macos")]

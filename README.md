@@ -88,6 +88,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 - **Arrange the panels** (Preferences > General, or right-click the brush shelf or the size/strength bar): put the brush shelf left, bottom or right; the settings panel left or right; and size, strength, focal shift and Raise/Carve floating at the top or bottom of the viewport, or in the toolbar. **Drag brushes** in the shelf to reorder them; the number keys follow your order. **Right-click a brush > Set hotkey** gives it a key of its own.
 - **Fit more in the shelf:** turn off **Show brush names** (Preferences > Interface) for an icon grid, or use **Narrow brush shelf** for a single column.
+- **Dock a menu** by dragging its heading to the left or right side of the window. **Dock left** and **Dock right** also work by click or keyboard. Materials, Pieces, Mesh, Tools, Groups, Mask, and View can stay open beside the viewport. Move or undock them from their own sections.
 - **Selection shapes** are in a dedicated picker on the brush shelf. Pick a shape before holding **Ctrl** or **Ctrl+Shift**.
 - **Change the look** in **Preferences > Appearance**: themes (including Sculptor and Midnight), a **Mix** that takes the colors, the controls (sliders and tiles) and the shadows each from any theme, accent and button colors, brush icon colors, UI tint hue and intensity, chrome brightness, the viewport background, interface scale, corners and slider thickness.
 

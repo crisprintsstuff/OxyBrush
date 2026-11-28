@@ -6,6 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Dockable menus.** Drag the Materials, Pieces, Mesh, Tools, Groups, Mask, or View header to either sidebar, or use **Dock left** and **Dock right**. Use **Undock** to remove it. Placements are remembered. [RFC 0061](docs/rfcs/0061-dockable-menus.md)
+
 - **Fur coat.** Grow a short preview coat on a piece, a masked region, or a face group. Roots follow sculpt edits and save with the project. Comb strokes lean the strands as you drag. Growing, resizing, grooming, and removing a coat support Undo. [RFC 0059](docs/rfcs/0059-surface-fur.md)
 - **Materials panel.** Open the inspector’s Matcaps, Glass, and Fur tabs from **View > Materials panel…** or from the shelf material picker.
 

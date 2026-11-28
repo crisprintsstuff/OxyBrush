@@ -27,6 +27,7 @@
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
 | **Viewport screenshots** | [RFC 0060](rfcs/0060-screenshot-export.md) adds viewport and full-window capture in PNG, JPEG, and WebP. |
 | **Selection and cutting** | A persistent shelf picker exposes masking, visibility, and cutter shapes. Shaped Line Split strokes reveal their new face group. [#654](https://github.com/crisprintsstuff/OxyBrush/issues/654) |
+| **Menu docking** | [RFC 0061](rfcs/0061-dockable-menus.md) brings Materials and working menus to left and right sidebar trays. |
 | **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
 
 Legend: ✅ done · 🚧 in progress · ⏳ planned · 🔬 research

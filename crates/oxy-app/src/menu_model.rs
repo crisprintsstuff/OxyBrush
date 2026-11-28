@@ -13,6 +13,8 @@
 //! on Linux; only `native_menu` (macOS) turns it into system menus.
 
 use crate::editor::{Editor, ExportFormat};
+use crate::menu_dock::{self, DockMenu};
+use crate::settings::PanelSide;
 use crate::tips::Cmd;
 use crate::ui::UiAction;
 use oxy_render::{InactiveLook, MatcapPreset};
@@ -52,6 +54,7 @@ pub enum MenuId {
     /// The Shading window: the sliders of View > Shading and Inactive pieces.
     ShadingWindow,
     MaterialsPanel,
+    DockMenu(DockMenu, PanelSide),
     ReferencesWindow,
     Xray,
     XrayScope(oxy_render::XrayScope),
@@ -132,18 +135,28 @@ fn sub(label: impl Into<String>, items: Vec<Node>) -> Node {
     Node::Sub { label: label.into(), enabled: true, items }
 }
 
+fn with_docking(menu: DockMenu, mut items: Vec<Node>) -> Vec<Node> {
+    let mut dock = vec![
+        item(MenuId::DockMenu(menu, PanelSide::Left), "Dock left"),
+        item(MenuId::DockMenu(menu, PanelSide::Right), "Dock right"),
+        Node::Separator,
+    ];
+    dock.append(&mut items);
+    dock
+}
+
 /// The menus, in menu bar order, as they are now.
 pub fn menus(ed: &Editor) -> Vec<Menu> {
     let busy = ed.job.is_some();
     vec![
         Menu { title: "File", items: file_menu(ed) },
         Menu { title: "Edit", items: edit_menu(ed) },
-        Menu { title: "Pieces", items: pieces_menu(ed, busy) },
-        Menu { title: "Mesh", items: mesh_menu(ed, busy) },
-        Menu { title: "Tools", items: tools_menu(ed, busy) },
-        Menu { title: "Groups", items: groups_menu() },
-        Menu { title: "Mask", items: mask_menu(ed) },
-        Menu { title: "View", items: view_menu(ed) },
+        Menu { title: "Pieces", items: with_docking(DockMenu::Pieces, pieces_menu(ed, busy)) },
+        Menu { title: "Mesh", items: with_docking(DockMenu::Mesh, mesh_menu(ed, busy)) },
+        Menu { title: "Tools", items: with_docking(DockMenu::Tools, tools_menu(ed, busy)) },
+        Menu { title: "Groups", items: with_docking(DockMenu::Groups, groups_menu()) },
+        Menu { title: "Mask", items: with_docking(DockMenu::Mask, mask_menu(ed)) },
+        Menu { title: "View", items: with_docking(DockMenu::View, view_menu(ed)) },
         Menu { title: "Plugins", items: plugins_menu(ed, busy) },
         Menu { title: "Help", items: help_menu(ed) },
     ]
@@ -537,7 +550,7 @@ fn view_menu(ed: &Editor) -> Vec<Node> {
             ],
         ),
         item(MenuId::MaterialsPanel, "Materials panel…"),
-        sub("Material", material),
+        sub("Material", with_docking(DockMenu::Materials, material)),
         Node::Separator,
         cmd(Cmd::ThemeWindow, "Theme…"),
         cmd_check(Cmd::Panels, "Show panels", ed.show_panels),
@@ -656,6 +669,7 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
         MenuId::ReferencesWindow => ed.show_references = true,
         MenuId::ShadingWindow => ed.show_shading = true,
         MenuId::MaterialsPanel => crate::ui::show_materials_panel(ctx, ed),
+        MenuId::DockMenu(menu, side) => menu_dock::place(ctx, ed, menu, side),
         MenuId::RecipeBox => ed.show_parts_bin = !ed.show_parts_bin,
         MenuId::Plugin(i, k) => ed.run_wasm_plugin(i, k),
         MenuId::StopPlugin(i) => ed.stop_wasm_plugin(i),

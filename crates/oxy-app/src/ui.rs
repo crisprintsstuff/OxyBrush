@@ -2,6 +2,7 @@
 
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
+use crate::menu_dock::{self, DockMenu};
 use crate::pose::{GizmoMode, Handle};
 use crate::settings::{
     AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, SliderSize, ThemePreset, UiLayout,
@@ -661,271 +662,245 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     // On macOS the menus are in the menu bar at the top of the screen.
     if !ed.native_menu_bar {
         egui::Panel::top("menu").show(ui, |ui| {
-        // With OxyBrush's own title bar (RFC 0028) the bar's empty part
-        // moves the window: an area under the menus, which take their
-        // clicks first.
-        let bar_sense = if own_bar { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
-        let bar = ui.scope_builder(egui::UiBuilder::new().sense(bar_sense), |ui| {
-        egui::MenuBar::new().ui(ui, |ui| {
-            tips::menu(ui, "File", plain::FILE, |ui| {
-                tips::menu(ui, "New", plain::NEW, |ui| {
-                    for (label, which, cmd) in [
-                        ("Sphere", "sphere", Cmd::NewSphere),
-                        ("Cube", "cube", Cmd::NewCube),
-                        ("Plane", "plane", Cmd::NewPlane),
-                        ("Human (female)", "human_female", Cmd::NewHumanFemale),
-                        ("Human (male)", "human_male", Cmd::NewHumanMale),
-                        ("Empty scene", "empty", Cmd::NewEmpty),
-                    ] {
-                        if tips::button(ui, label, cmd).clicked() {
-                            ed.request(Pending::New(which));
+            // With OxyBrush's own title bar (RFC 0028) the bar's empty part
+            // moves the window: an area under the menus, which take their
+            // clicks first.
+            let bar_sense = if own_bar { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+            let bar = ui
+                .scope_builder(egui::UiBuilder::new().sense(bar_sense), |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        tips::menu(ui, "File", plain::FILE, |ui| {
+                            tips::menu(ui, "New", plain::NEW, |ui| {
+                                for (label, which, cmd) in [
+                                    ("Sphere", "sphere", Cmd::NewSphere),
+                                    ("Cube", "cube", Cmd::NewCube),
+                                    ("Plane", "plane", Cmd::NewPlane),
+                                    ("Human (female)", "human_female", Cmd::NewHumanFemale),
+                                    ("Human (male)", "human_male", Cmd::NewHumanMale),
+                                    ("Empty scene", "empty", Cmd::NewEmpty),
+                                ] {
+                                    if tips::button(ui, label, cmd).clicked() {
+                                        ed.request(Pending::New(which));
+                                    }
+                                }
+                            });
+                            if tips::button_km(ui, &ed.keymap, "New project", Cmd::NewTab).clicked() {
+                                ed.add_tab("sphere");
+                            }
+                            if tips::button_km(ui, &ed.keymap, "Open…", Cmd::Open).clicked() {
+                                action = Some(UiAction::Open);
+                            }
+                            ui.add_enabled_ui(!ed.recent_files.is_empty(), |ui| {
+                                tips::menu(ui, "Open recent", plain::OPEN_RECENT, |ui| recent_menu(ui, ed));
+                            });
+                            if tips::button_km(ui, &ed.keymap, "Import mesh as piece…", Cmd::Import).clicked() {
+                                action = Some(UiAction::Import);
+                            }
+                            ui.separator();
+                            if tips::button_km(ui, &ed.keymap, "Save", Cmd::Save).clicked() {
+                                action = Some(UiAction::Save);
+                            }
+                            if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
+                                action = Some(UiAction::SaveAs);
+                            }
+                            if tips::button_on(ui, ed.can_revert(), "Revert", Cmd::Revert).clicked() {
+                                ed.revert();
+                            }
+                            if tips::button_km(ui, &ed.keymap, "Close this project", Cmd::CloseTab).clicked() {
+                                ed.request_close_tab(ed.active_document);
+                            }
+                            if ed.send_back_available()
+                                && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked()
+                            {
+                                ed.send_back();
+                            }
+                            if let Some(app) = ed.bridge.as_ref().map(|b| b.app().to_owned()) {
+                                if ui.button(format!("Send back to {app}")).on_hover_text(plain::LINK_SEND).clicked() {
+                                    ed.send_back_link(false);
+                                }
+                                if ui
+                                    .button(format!("Send back to {app} and close"))
+                                    .on_hover_text(plain::LINK_SEND_CLOSE)
+                                    .clicked()
+                                {
+                                    ed.send_back_link(true);
+                                }
+                            }
+                            if tips::button_on_km(
+                                ui,
+                                &ed.keymap,
+                                ed.scene.pieces.iter().any(|p| p.visible),
+                                "Export visible…",
+                                Cmd::Export,
+                            )
+                            .clicked()
+                            {
+                                action = Some(UiAction::Export);
+                            }
+                            ui.menu_button(format!("Export type: .{}", ed.export_format.extension()), |ui| {
+                                for f in crate::editor::ExportFormat::ALL {
+                                    ui.radio_value(&mut ed.export_format, f, f.label());
+                                }
+                                if ed.export_format == crate::editor::ExportFormat::Threemf {
+                                    ui.separator();
+                                    ui.label(format!(
+                                        "3MF uses {} mm per unit (Preferences > Units / 3D print).",
+                                        ed.print_scale_mm_per_unit
+                                    ));
+                                }
+                            })
+                            .response
+                            .on_hover_text(
+                                "The file type Export proposes. A different extension typed in the dialog wins.",
+                            );
+                            ui.menu_button(format!("glTF compression: {}", ed.gltf_compression.key()), |ui| {
+                                gltf_compression_choice(ui, ed);
+                            })
+                            .response
+                            .on_hover_text("How .glb and .gltf exports are compressed. Also in Preferences > General.");
+                            if ui.button("Export screenshot…").clicked() {
+                                ed.open_screenshot_export();
+                            }
+                            ui.separator();
+                            if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
+                                ed.request_run_script = true;
+                            }
+                            ui.separator();
+                            if tips::button(ui, "Quit", Cmd::Quit).clicked() {
+                                ed.request(Pending::Quit);
+                            }
+                        });
+                        tips::menu(ui, "Edit", plain::EDIT, |ui| {
+                            if tips::button_on_km(ui, &ed.keymap, ed.can_undo(), "Undo", Cmd::Undo).clicked() {
+                                ed.undo();
+                            }
+                            if tips::button_on_km(ui, &ed.keymap, ed.can_redo(), "Redo", Cmd::Redo).clicked() {
+                                ed.redo();
+                            }
+                            ui.separator();
+                            if tips::button_on_km(
+                                ui,
+                                &ed.keymap,
+                                !ed.scene.pieces.is_empty(),
+                                "Copy piece",
+                                Cmd::CopyPiece,
+                            )
+                            .clicked()
+                            {
+                                ed.copy_pieces();
+                            }
+                            if tips::button_on_km(
+                                ui,
+                                &ed.keymap,
+                                !ed.piece_clipboard.is_empty(),
+                                "Paste piece",
+                                Cmd::PastePiece,
+                            )
+                            .clicked()
+                            {
+                                ed.paste_pieces();
+                            }
+                            let reopen = ed.can_reopen_last_stroke();
+                            let replay = ed.can_replay_last_stroke();
+                            tips::menu(ui, "Last stroke", plain::LAST_STROKE, |ui| {
+                                use crate::editor::LastStrokeAs as As;
+                                if tips::button_on_km(ui, &ed.keymap, replay, "Replay", Cmd::ReplayLastStroke).clicked()
+                                {
+                                    ed.replay_last_stroke();
+                                }
+                                if tips::button_on_km(ui, &ed.keymap, reopen, "Edit as curve", Cmd::LastStrokeAsCurve)
+                                    .clicked()
+                                {
+                                    ed.reopen_last_stroke(As::Curve);
+                                }
+                                if tips::button_on(ui, reopen, "Use as Curve Move curve", Cmd::LastStrokeAsCurveMove)
+                                    .clicked()
+                                {
+                                    ed.reopen_last_stroke(As::CurveMove);
+                                }
+                                if tips::button_on(ui, reopen, "Use as tube path", Cmd::LastStrokeAsTube).clicked() {
+                                    ed.reopen_last_stroke(As::Tube);
+                                }
+                            });
+                            if ed.undo_per_piece {
+                                // Ctrl+Z works on the active piece; the whole-scene undo stays reachable here.
+                                if ui
+                                    .add_enabled(ed.history.can_undo(), egui::Button::new("Undo in whole scene"))
+                                    .clicked()
+                                {
+                                    ed.undo_scene();
+                                }
+                                if ui
+                                    .add_enabled(ed.history.can_redo(), egui::Button::new("Redo in whole scene"))
+                                    .clicked()
+                                {
+                                    ed.redo_scene();
+                                }
+                            } else {
+                                if tips::button_on_km(
+                                    ui,
+                                    &ed.keymap,
+                                    ed.history.can_undo(),
+                                    "Undo on this piece",
+                                    Cmd::UndoPiece,
+                                )
+                                .clicked()
+                                {
+                                    ed.undo_piece();
+                                }
+                                if tips::button_on_km(
+                                    ui,
+                                    &ed.keymap,
+                                    ed.history.can_redo(),
+                                    "Redo on this piece",
+                                    Cmd::RedoPiece,
+                                )
+                                .clicked()
+                                {
+                                    ed.redo_piece();
+                                }
+                            }
+                            ui.separator();
+                            if tips::button_km(ui, &ed.keymap, "Command palette…", Cmd::Palette).clicked() {
+                                ed.palette =
+                                    Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
+                            }
+                            if tips::button_km(ui, &ed.keymap, "Find brush…", Cmd::FindBrush).clicked() {
+                                ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
+                            }
+                            ui.separator();
+                            if tips::button_km(ui, &ed.keymap, "Preferences…", Cmd::Preferences).clicked() {
+                                ed.open_settings(crate::editor::SettingsTab::General);
+                            }
+                        });
+                        for (menu, tip) in [
+                            (DockMenu::Pieces, plain::PIECES),
+                            (DockMenu::Mesh, plain::MESH),
+                            (DockMenu::Tools, plain::TOOLS),
+                            (DockMenu::Groups, plain::GROUPS),
+                            (DockMenu::Mask, plain::MASK),
+                            (DockMenu::View, plain::VIEW),
+                        ] {
+                            tips::menu(ui, menu.label(), tip, |ui| {
+                                dock_header(ui, ed, menu);
+                                dock_menu_contents(ui, ed, menu, busy);
+                            });
                         }
-                    }
-                });
-                if tips::button_km(ui, &ed.keymap, "New project", Cmd::NewTab).clicked() {
-                    ed.add_tab("sphere");
-                }
-                if tips::button_km(ui, &ed.keymap, "Open…", Cmd::Open).clicked() {
-                    action = Some(UiAction::Open);
-                }
-                ui.add_enabled_ui(!ed.recent_files.is_empty(), |ui| {
-                    tips::menu(ui, "Open recent", plain::OPEN_RECENT, |ui| recent_menu(ui, ed));
-                });
-                if tips::button_km(ui, &ed.keymap, "Import mesh as piece…", Cmd::Import).clicked() {
-                    action = Some(UiAction::Import);
-                }
-                ui.separator();
-                if tips::button_km(ui, &ed.keymap, "Save", Cmd::Save).clicked() {
-                    action = Some(UiAction::Save);
-                }
-                if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
-                    action = Some(UiAction::SaveAs);
-                }
-                if tips::button_on(ui, ed.can_revert(), "Revert", Cmd::Revert).clicked() {
-                    ed.revert();
-                }
-                if tips::button_km(ui, &ed.keymap, "Close this project", Cmd::CloseTab).clicked() {
-                    ed.request_close_tab(ed.active_document);
-                }
-                if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
-                    ed.send_back();
-                }
-                if let Some(app) = ed.bridge.as_ref().map(|b| b.app().to_owned()) {
-                    if ui.button(format!("Send back to {app}")).on_hover_text(plain::LINK_SEND).clicked() {
-                        ed.send_back_link(false);
-                    }
-                    if ui.button(format!("Send back to {app} and close")).on_hover_text(plain::LINK_SEND_CLOSE).clicked() {
-                        ed.send_back_link(true);
-                    }
-                }
-                if tips::button_on_km(
-                    ui,
-                    &ed.keymap,
-                    ed.scene.pieces.iter().any(|p| p.visible),
-                    "Export visible…",
-                    Cmd::Export,
-                )
-                .clicked()
-                {
-                    action = Some(UiAction::Export);
-                }
-                ui.menu_button(format!("Export type: .{}", ed.export_format.extension()), |ui| {
-                    for f in crate::editor::ExportFormat::ALL {
-                        ui.radio_value(&mut ed.export_format, f, f.label());
-                    }
-                    if ed.export_format == crate::editor::ExportFormat::Threemf {
-                        ui.separator();
-                        ui.label(format!(
-                            "3MF uses {} mm per unit (Preferences > Units / 3D print).",
-                            ed.print_scale_mm_per_unit
-                        ));
-                    }
-                })
-                .response
-                .on_hover_text("The file type Export proposes. A different extension typed in the dialog wins.");
-                ui.menu_button(format!("glTF compression: {}", ed.gltf_compression.key()), |ui| {
-                    gltf_compression_choice(ui, ed);
-                })
-                .response
-                .on_hover_text("How .glb and .gltf exports are compressed. Also in Preferences > General.");
-                if ui.button("Export screenshot…").clicked() {
-                    ed.open_screenshot_export();
-                }
-                ui.separator();
-                if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
-                    ed.request_run_script = true;
-                }
-                ui.separator();
-                if tips::button(ui, "Quit", Cmd::Quit).clicked() {
-                    ed.request(Pending::Quit);
-                }
-            });
-            tips::menu(ui, "Edit", plain::EDIT, |ui| {
-                if tips::button_on_km(ui, &ed.keymap, ed.can_undo(), "Undo", Cmd::Undo).clicked() {
-                    ed.undo();
-                }
-                if tips::button_on_km(ui, &ed.keymap, ed.can_redo(), "Redo", Cmd::Redo).clicked() {
-                    ed.redo();
-                }
-                ui.separator();
-                if tips::button_on_km(ui, &ed.keymap, !ed.scene.pieces.is_empty(), "Copy piece", Cmd::CopyPiece)
-                    .clicked()
-                {
-                    ed.copy_pieces();
-                }
-                if tips::button_on_km(ui, &ed.keymap, !ed.piece_clipboard.is_empty(), "Paste piece", Cmd::PastePiece)
-                    .clicked()
-                {
-                    ed.paste_pieces();
-                }
-                let reopen = ed.can_reopen_last_stroke();
-                let replay = ed.can_replay_last_stroke();
-                tips::menu(ui, "Last stroke", plain::LAST_STROKE, |ui| {
-                    use crate::editor::LastStrokeAs as As;
-                    if tips::button_on_km(ui, &ed.keymap, replay, "Replay", Cmd::ReplayLastStroke).clicked() {
-                        ed.replay_last_stroke();
-                    }
-                    if tips::button_on_km(ui, &ed.keymap, reopen, "Edit as curve", Cmd::LastStrokeAsCurve).clicked() {
-                        ed.reopen_last_stroke(As::Curve);
-                    }
-                    if tips::button_on(ui, reopen, "Use as Curve Move curve", Cmd::LastStrokeAsCurveMove).clicked() {
-                        ed.reopen_last_stroke(As::CurveMove);
-                    }
-                    if tips::button_on(ui, reopen, "Use as tube path", Cmd::LastStrokeAsTube).clicked() {
-                        ed.reopen_last_stroke(As::Tube);
-                    }
-                });
-                if ed.undo_per_piece {
-                    // Ctrl+Z works on the active piece; the whole-scene undo stays reachable here.
-                    if ui.add_enabled(ed.history.can_undo(), egui::Button::new("Undo in whole scene")).clicked() {
-                        ed.undo_scene();
-                    }
-                    if ui.add_enabled(ed.history.can_redo(), egui::Button::new("Redo in whole scene")).clicked() {
-                        ed.redo_scene();
-                    }
-                } else {
-                    if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo on this piece", Cmd::UndoPiece)
-                        .clicked()
-                    {
-                        ed.undo_piece();
-                    }
-                    if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo on this piece", Cmd::RedoPiece)
-                        .clicked()
-                    {
-                        ed.redo_piece();
-                    }
-                }
-                ui.separator();
-                if tips::button_km(ui, &ed.keymap, "Command palette…", Cmd::Palette).clicked() {
-                    ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
-                }
-                if tips::button_km(ui, &ed.keymap, "Find brush…", Cmd::FindBrush).clicked() {
-                    ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
-                }
-                ui.separator();
-                if tips::button_km(ui, &ed.keymap, "Preferences…", Cmd::Preferences).clicked() {
-                    ed.open_settings(crate::editor::SettingsTab::General);
-                }
-            });
-            tips::menu(ui, "Pieces", plain::PIECES, |ui| piece_actions(ui, ed, busy));
-            tips::menu(ui, "Mesh", plain::MESH, |ui| mesh_actions(ui, ed, busy));
-            tips::menu(ui, "Tools", plain::TOOLS, |ui| tool_actions(ui, ed, busy));
-            tips::menu(ui, "Groups", plain::GROUPS, |ui| group_actions(ui, ed));
-            tips::menu(ui, "Mask", plain::MASK, |ui| mask_actions(ui, ed));
-            tips::menu(ui, "View", plain::VIEW, |ui| {
-                if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
-                    ed.frame();
-                }
-                if tips::button_km(ui, &ed.keymap, "Zoom in", Cmd::ZoomIn).clicked() {
-                    ed.zoom_view(1.0);
-                }
-                if tips::button_km(ui, &ed.keymap, "Zoom out", Cmd::ZoomOut).clicked() {
-                    ed.zoom_view(-1.0);
-                }
-                tips::menu(ui, "Split view", "Show two viewports with their own cameras (RFC 0054)", |ui| {
-                    for layout in crate::split_view::SplitLayout::ALL {
-                        if ui.selectable_label(ed.split == layout, layout.label()).clicked() {
-                            ed.set_split(layout);
-                            ui.close();
+                        tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
+                        tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
+                        if own_bar {
+                            // The project name over empty bar that moves the window,
+                            // then the window buttons (RFC 0028).
+                            let title = ed.title();
+                            crate::title_bar::title_and_buttons(ui, ed, &title);
                         }
-                    }
-                });
-                // Long groups live in submenus so the menu fits on small screens.
-                tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
-                    if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
-                        ed.camera.snap(0.0, 0.0);
-                    }
-                    if tips::button_km(ui, &ed.keymap, "Back", Cmd::Back).clicked() {
-                        ed.camera.snap(std::f32::consts::PI, 0.0);
-                    }
-                    if tips::button_km(ui, &ed.keymap, "Left", Cmd::Left).clicked() {
-                        ed.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
-                    }
-                    if tips::button_km(ui, &ed.keymap, "Right", Cmd::Right).clicked() {
-                        ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
-                    }
-                    if tips::button_km(ui, &ed.keymap, "Top", Cmd::Top).clicked() {
-                        ed.camera.snap(0.0, 1.55);
-                    }
-                    if tips::button_km(ui, &ed.keymap, "Bottom", Cmd::Bottom).clicked() {
-                        ed.camera.snap(0.0, -1.55);
-                    }
-                    ui.separator();
-                    tips::check_km(ui, &ed.keymap, &mut ed.documents[ed.active_document].camera.orthographic, "Orthographic", Cmd::Ortho);
-                    tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
-                        ui.set_min_width(280.0);
-                        focal_length_controls(ui, ed);
                     });
-                });
-                tips::menu(ui, "X-ray", "Fade meshes to see geometry behind them", |ui| {
-                    ui.set_min_width(320.0);
-                    xray_controls(ui, ed);
-                });
-                if ui.button("References…").clicked() {
-                    ed.show_references = true;
-                    ui.close();
-                }
-                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, hard edges, vertex color, lights, wireframe and face group colors", |ui| {
-                    shading_controls(ui, ed);
-                });
-                tips::menu(ui, "Inactive pieces", plain::INACTIVE_PIECES, |ui| inactive_pieces_menu(ui, ed));
-                tips::menu(ui, "Brush cursor", "How the brush circle is drawn over the model", |ui| {
-                    surface_cursor_checkbox(ui, ed);
-                    ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
-                        .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
-                });
-                if ui.button("Materials panel…").clicked() {
-                    show_materials_panel(ui.ctx(), ed);
-                    ui.close();
-                }
-                view_material_menu(ui, ed);
-                ui.separator();
-                if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
-                    ed.open_theme(crate::editor::ThemeTab::Themes);
-                }
-                tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
-                let mut inspector = ed.show_panels && ed.show_inspector;
-                if tips::check_km(ui, &ed.keymap, &mut inspector, "Show settings panel", Cmd::SettingsPanel).changed() {
-                    ed.toggle_settings_panel();
-                }
-                ui.checkbox(&mut ed.show_parts_bin, "Recipe Box")
-                    .on_hover_text("Show the Recipe Box window (movable; close with ×). Drag a recipe onto the model to place it.");
-            });
-            tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
-            tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
+                })
+                .response;
             if own_bar {
-                // The project name over empty bar that moves the window,
-                // then the window buttons (RFC 0028).
-                let title = ed.title();
-                crate::title_bar::title_and_buttons(ui, ed, &title);
+                crate::title_bar::bar_background(&bar, ed);
             }
         });
-        })
-        .response;
-        if own_bar {
-            crate::title_bar::bar_background(&bar, ed);
-        }
-    });
     }
     if own_bar {
         crate::title_bar::resize_edges(ui, ed);
@@ -1000,9 +975,18 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
         if ed.show_inspector {
-            let max_w = (ui.ctx().input(|i| i.viewport_rect()).width() * 0.45).clamp(m.inspector_width, 500.0);
+            let mut max_w = (ui.ctx().input(|i| i.viewport_rect()).width() * 0.45).clamp(m.inspector_width, 500.0);
+            let opposite_tray = ed.menu_docks.iter().flatten().any(|side| *side != ed.panels);
+            if opposite_tray {
+                max_w = max_w.min((ui.available_width() - m.strip_width - 270.0).max(180.0));
+            }
             let remembered = ed.inspector_width;
-            let default_w = if (180.0..=max_w).contains(&remembered) { remembered } else { m.inspector_width };
+            let preferred = if remembered >= 180.0 && (remembered <= max_w || opposite_tray) {
+                remembered
+            } else {
+                m.inspector_width
+            };
+            let default_w = preferred.min(max_w);
             let panel_r = inspector_panel.resizable(true).min_size(180.0).max_size(max_w).default_size(default_w).show(
                 ui,
                 |ui| {
@@ -1014,12 +998,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 },
             );
             let w = panel_r.response.rect.width();
-            if (180.0..=500.0).contains(&w) && (w - ed.inspector_width).abs() > 0.5 {
+            let limited = opposite_tray && remembered > max_w && w >= max_w - 0.5;
+            if !limited && (180.0..=500.0).contains(&w) && (w - remembered).abs() > 0.5 {
                 ed.inspector_width = w;
             }
         }
+        dock_trays(ui, ed, busy);
         view_strip(ui, ed);
     }
+    menu_dock::drop_targets(ui.ctx(), ed);
 
     if std::mem::take(&mut ed.request_load_alpha) {
         action = Some(UiAction::LoadAlpha);
@@ -3615,7 +3602,16 @@ fn floating_quick_bar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) 
         (egui::Align2::CENTER_BOTTOM, room.center_bottom() - egui::vec2(0.0, 12.0))
     };
     let max_width = (room.width() - 40.0).max(200.0);
-    egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).constrain_to(room).show(ctx, |ui| {
+    let id = egui::Id::unique("quick_bar");
+    // Reflow within the new canvas when a dock tray changes its width.
+    let width_changed = ctx.data_mut(|data| {
+        let key = id.with("available_width");
+        let width = max_width.round() as u32;
+        let changed = data.get_temp::<u32>(key) != Some(width);
+        data.insert_temp(key, width);
+        changed
+    });
+    egui::Area::new(id).pivot(pivot).fixed_pos(pos).constrain_to(room).sizing_pass(width_changed).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
             .corner_radius(widgets::rounding(10.0))
             .inner_margin(egui::Margin::symmetric(10, 6))
@@ -3872,7 +3868,8 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Materials").strong());
+                    menu_dock::drag_handle(ui, DockMenu::Materials, "Materials");
+                    menu_dock::place_buttons(ui, ed, DockMenu::Materials);
                     if ui.small_button("Close").clicked() {
                         ui.close();
                     }
@@ -3888,11 +3885,185 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
+fn view_actions(ui: &mut Ui, ed: &mut Editor) {
+    if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
+        ed.frame();
+    }
+    if tips::button_km(ui, &ed.keymap, "Zoom in", Cmd::ZoomIn).clicked() {
+        ed.zoom_view(1.0);
+    }
+    if tips::button_km(ui, &ed.keymap, "Zoom out", Cmd::ZoomOut).clicked() {
+        ed.zoom_view(-1.0);
+    }
+    tips::menu(ui, "Split view", "Show two viewports with their own cameras (RFC 0054)", |ui| {
+        for layout in crate::split_view::SplitLayout::ALL {
+            if ui.selectable_label(ed.split == layout, layout.label()).clicked() {
+                ed.set_split(layout);
+                ui.close();
+            }
+        }
+    });
+    // Long groups live in submenus so the menu fits on small screens.
+    tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
+        if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
+            ed.camera.snap(0.0, 0.0);
+        }
+        if tips::button_km(ui, &ed.keymap, "Back", Cmd::Back).clicked() {
+            ed.camera.snap(std::f32::consts::PI, 0.0);
+        }
+        if tips::button_km(ui, &ed.keymap, "Left", Cmd::Left).clicked() {
+            ed.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
+        }
+        if tips::button_km(ui, &ed.keymap, "Right", Cmd::Right).clicked() {
+            ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
+        }
+        if tips::button_km(ui, &ed.keymap, "Top", Cmd::Top).clicked() {
+            ed.camera.snap(0.0, 1.55);
+        }
+        if tips::button_km(ui, &ed.keymap, "Bottom", Cmd::Bottom).clicked() {
+            ed.camera.snap(0.0, -1.55);
+        }
+        ui.separator();
+        tips::check_km(
+            ui,
+            &ed.keymap,
+            &mut ed.documents[ed.active_document].camera.orthographic,
+            "Orthographic",
+            Cmd::Ortho,
+        );
+        tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
+            ui.set_min_width(280.0);
+            focal_length_controls(ui, ed);
+        });
+    });
+    tips::menu(ui, "X-ray", "Fade meshes to see geometry behind them", |ui| {
+        ui.set_min_width(320.0);
+        xray_controls(ui, ed);
+    });
+    if ui.button("References…").clicked() {
+        ed.show_references = true;
+        ui.close();
+    }
+    tips::menu(
+        ui,
+        "Shading",
+        "Ambient occlusion, cavity, flat shading, hard edges, vertex color, lights, wireframe and face group colors",
+        |ui| {
+            shading_controls(ui, ed);
+        },
+    );
+    tips::menu(ui, "Inactive pieces", plain::INACTIVE_PIECES, |ui| inactive_pieces_menu(ui, ed));
+    tips::menu(ui, "Brush cursor", "How the brush circle is drawn over the model", |ui| {
+        surface_cursor_checkbox(ui, ed);
+        ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
+            .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
+    });
+    if ui.button("Materials panel…").clicked() {
+        show_materials_panel(ui.ctx(), ed);
+        ui.close();
+    }
+    view_material_menu(ui, ed);
+    ui.separator();
+    if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
+        ed.open_theme(crate::editor::ThemeTab::Themes);
+    }
+    tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
+    let mut inspector = ed.show_panels && ed.show_inspector;
+    if tips::check_km(ui, &ed.keymap, &mut inspector, "Show settings panel", Cmd::SettingsPanel).changed() {
+        ed.toggle_settings_panel();
+    }
+    ui.checkbox(&mut ed.show_parts_bin, "Recipe Box")
+        .on_hover_text("Show the Recipe Box window (movable; close with ×). Drag a recipe onto the model to place it.");
+}
+
+fn dock_header(ui: &mut Ui, ed: &mut Editor, menu: DockMenu) {
+    ui.horizontal(|ui| {
+        menu_dock::drag_handle(ui, menu, menu.label());
+        menu_dock::place_buttons(ui, ed, menu);
+    });
+    ui.separator();
+}
+
+fn dock_menu_contents(ui: &mut Ui, ed: &mut Editor, menu: DockMenu, busy: bool) {
+    match menu {
+        DockMenu::Materials => materials_contents(ui, ed, busy || modeling_mode(ed), None),
+        DockMenu::Pieces => piece_actions(ui, ed, busy),
+        DockMenu::Mesh => mesh_actions(ui, ed, busy),
+        DockMenu::Tools => tool_actions(ui, ed, busy),
+        DockMenu::Groups => group_actions(ui, ed),
+        DockMenu::Mask => mask_actions(ui, ed),
+        DockMenu::View => view_actions(ui, ed),
+    }
+}
+
+fn dock_trays(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    for &side in PanelSide::ALL {
+        if (ed.show_inspector && ed.panels == side) || !ed.menu_docks.contains(&Some(side)) {
+            continue;
+        }
+        let panel = match side {
+            PanelSide::Left => egui::Panel::left("left_dock_tray"),
+            PanelSide::Right => egui::Panel::right("right_dock_tray"),
+        };
+        let max_w = (ui.available_width() - metrics(ed.layout).strip_width - 120.0).clamp(40.0, 350.0);
+        panel.resizable(true).min_size(175.0f32.min(max_w)).max_size(max_w).default_size(228.0f32.min(max_w)).show(
+            ui,
+            |ui| {
+                let narrow = max_w < 175.0;
+                egui::ScrollArea::new([narrow, true]).auto_shrink([false, false]).show(ui, |ui| {
+                    if narrow {
+                        ui.set_min_width(175.0);
+                    }
+                    docked_menus(ui, ed, side, busy);
+                });
+            },
+        );
+    }
+}
+
+fn docked_menus(ui: &mut Ui, ed: &mut Editor, side: PanelSide, busy: bool) {
+    for menu in DockMenu::ALL {
+        if ed.menu_docks[menu as usize] != Some(side) {
+            continue;
+        }
+        let material_tab = if menu == DockMenu::Materials { take_materials_reveal(ui) } else { None };
+        let reveal = menu_dock::take_reveal(ui, menu) || material_tab.is_some();
+        if reveal {
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
+        let id = format!("dock_{}", menu.label());
+        widgets::section_with_id(ui, &id, menu.label(), "Docked menu", true, reveal.then_some(true), |ui| {
+            ui.horizontal(|ui| {
+                menu_dock::drag_handle(ui, menu, "Drag");
+                let (other, label) = match side {
+                    PanelSide::Left => (PanelSide::Right, "Move right"),
+                    PanelSide::Right => (PanelSide::Left, "Move left"),
+                };
+                if ui.small_button(label).clicked() {
+                    menu_dock::place(ui.ctx(), ed, menu, other);
+                }
+                if ui.small_button("Undock").clicked() {
+                    ed.menu_docks[menu as usize] = None;
+                }
+            });
+            // Commands can close their original menu without closing the tray.
+            ui.scope_builder(egui::UiBuilder::new().closable(), |ui| {
+                if menu == DockMenu::Materials {
+                    materials_contents(ui, ed, busy || modeling_mode(ed), material_tab.flatten());
+                } else {
+                    dock_menu_contents(ui, ed, menu, busy);
+                }
+            });
+        });
+    }
+}
+
 fn view_material_menu(ui: &mut Ui, ed: &mut Editor) {
     let height = (ui.ctx().content_rect().height() - 48.0).max(160.0);
     let config = egui::menu::MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     let (response, _) = egui::menu::SubMenuButton::new("Material").config(config).ui(ui, |ui| {
         egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+            dock_header(ui, ed, DockMenu::Materials);
             quick_material_target(ui, ed);
             lit_material_controls(ui, ed);
             for m in MatcapPreset::ALL {
@@ -3983,7 +4154,9 @@ pub(crate) fn show_materials_panel(ctx: &egui::Context, ed: &mut Editor) {
 
 fn reveal_materials(ctx: &egui::Context, ed: &mut Editor, tab: Option<MaterialsTab>) {
     ed.show_panels = true;
-    ed.show_inspector = true;
+    if ed.menu_docks[DockMenu::Materials as usize].is_none() {
+        ed.show_inspector = true;
+    }
     ctx.data_mut(|data| data.insert_temp(egui::Id::unique(REVEAL_MATERIALS), tab));
     ctx.request_repaint();
 }
@@ -3995,8 +4168,12 @@ enum MaterialsTab {
     Fur,
 }
 
+fn take_materials_reveal(ui: &Ui) -> Option<Option<MaterialsTab>> {
+    ui.data_mut(|data| data.remove_temp::<Option<MaterialsTab>>(egui::Id::unique(REVEAL_MATERIALS)))
+}
+
 fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    let reveal = ui.ctx().data_mut(|data| data.remove_temp::<Option<MaterialsTab>>(egui::Id::unique(REVEAL_MATERIALS)));
+    let reveal = take_materials_reveal(ui);
     if reveal.is_some() {
         ui.scroll_to_cursor(Some(egui::Align::Center));
     }
@@ -4008,52 +4185,54 @@ fn materials_panel(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         "Matcaps, viewport glass and fur coats.",
         has_fur,
         reveal.map(|_| true),
-        |ui| {
-            let id = ui.scope_id().with("materials_tab");
-            let default_tab = if has_fur {
-                MaterialsTab::Fur
-            } else if ed
-                .scene
-                .try_active()
-                .and_then(|p| p.material.as_deref())
-                .and_then(oxy_render::GlassMaterial::from_key)
-                .is_some()
-            {
-                MaterialsTab::Glass
-            } else {
-                MaterialsTab::Matcaps
-            };
-            let mut tab =
-                reveal.flatten().or_else(|| ui.data(|data| data.get_temp::<MaterialsTab>(id))).unwrap_or(default_tab);
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut tab, MaterialsTab::Matcaps, "Matcaps");
-                ui.selectable_value(&mut tab, MaterialsTab::Glass, "Glass");
-                ui.selectable_value(&mut tab, MaterialsTab::Fur, "Fur");
-            });
-            ui.data_mut(|data| data.insert_temp(id, tab));
-            match tab {
-                MaterialsTab::Matcaps => {
-                    material_target(ui, ed);
-                    lit_material_controls(ui, ed);
-                    matcap_swatches(ui, ed, true);
-                }
-                MaterialsTab::Glass | MaterialsTab::Fur => {
-                    let Some(piece) = ed.scene.try_active() else {
-                        ui.label("Select a piece.");
-                        return;
-                    };
-                    ui.label(egui::RichText::new(&piece.name).small().strong());
-                    if tab == MaterialsTab::Glass {
-                        use_scene_material(ui, ed);
-                        glass_presets(ui, ed);
-                        glass_controls(ui, ed);
-                    } else {
-                        crate::fur::section(ui, ed, busy);
-                    }
-                }
-            }
-        },
+        |ui| materials_contents(ui, ed, busy, reveal.flatten()),
     );
+}
+
+fn materials_contents(ui: &mut Ui, ed: &mut Editor, busy: bool, tab: Option<MaterialsTab>) {
+    let has_fur = ed.scene.try_active().is_some_and(|piece| piece.fur.is_some());
+    let id = egui::Id::unique("materials_tab");
+    let default_tab = if has_fur {
+        MaterialsTab::Fur
+    } else if ed
+        .scene
+        .try_active()
+        .and_then(|p| p.material.as_deref())
+        .and_then(oxy_render::GlassMaterial::from_key)
+        .is_some()
+    {
+        MaterialsTab::Glass
+    } else {
+        MaterialsTab::Matcaps
+    };
+    let mut tab = tab.or_else(|| ui.data(|data| data.get_temp::<MaterialsTab>(id))).unwrap_or(default_tab);
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut tab, MaterialsTab::Matcaps, "Matcaps");
+        ui.selectable_value(&mut tab, MaterialsTab::Glass, "Glass");
+        ui.selectable_value(&mut tab, MaterialsTab::Fur, "Fur");
+    });
+    ui.data_mut(|data| data.insert_temp(id, tab));
+    match tab {
+        MaterialsTab::Matcaps => {
+            material_target(ui, ed);
+            lit_material_controls(ui, ed);
+            matcap_swatches(ui, ed, true);
+        }
+        MaterialsTab::Glass | MaterialsTab::Fur => {
+            let Some(piece) = ed.scene.try_active() else {
+                ui.label("Select a piece.");
+                return;
+            };
+            ui.label(egui::RichText::new(&piece.name).small().strong());
+            if tab == MaterialsTab::Glass {
+                use_scene_material(ui, ed);
+                glass_presets(ui, ed);
+                glass_controls(ui, ed);
+            } else {
+                crate::fur::section(ui, ed, busy);
+            }
+        }
+    }
 }
 
 /// Scene-wide surface settings used by viewport lighting, regardless of the
@@ -6010,8 +6189,11 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let modeling = modeling_mode(ed);
     // Mode-aware defaults: keep the panel short while sculpting; hide brush
     // stacks during Poly Edit / Retopo / OxySpheres / Tube.
+    docked_menus(ui, ed, ed.panels, busy);
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
-    materials_panel(ui, ed, busy || modeling);
+    if ed.menu_docks[DockMenu::Materials as usize].is_none() {
+        materials_panel(ui, ed, busy || modeling);
+    }
     if !focus {
         let layers_open = ed.living.enabled;
         widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| {
@@ -10001,6 +10183,70 @@ mod tests {
         let apply = widgets_labelled(&mut ed, &ctx, "Apply glass settings")[0].center();
         click_at(&mut ed, &ctx, apply);
         assert_eq!(ed.scene.active().material.as_deref(), Some(preview.key().as_str()));
+    }
+
+    #[test]
+    fn materials_header_docks_on_drop_and_moves_or_undocks_from_the_tray() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        let tile = widgets_labelled(&mut ed, &ctx, plain::MATERIAL_TILE)[0].center();
+        click_at(&mut ed, &ctx, tile);
+        let header = widgets_labelled(&mut ed, &ctx, "Drag Materials to dock")[0].center();
+        drag(&mut ed, &ctx, header, egui::pos2(1360.0, 380.0));
+        assert_eq!(ed.menu_docks[DockMenu::Materials as usize], Some(PanelSide::Right));
+        assert_eq!(widgets_labelled(&mut ed, &ctx, "Glass").len(), 1);
+
+        let move_left = widgets_labelled(&mut ed, &ctx, "Move left")[0].center();
+        click_at(&mut ed, &ctx, move_left);
+        assert_eq!(ed.menu_docks[DockMenu::Materials as usize], Some(PanelSide::Left));
+        let glass = widgets_labelled(&mut ed, &ctx, "Glass")[0].center();
+        assert!(glass.x < 500.0, "the palette is on the left");
+        click_at(&mut ed, &ctx, glass);
+        let clear = widgets_labelled(&mut ed, &ctx, "Clear Glass")[0].center();
+        click_at(&mut ed, &ctx, clear);
+        assert!(ed.scene.active().material.as_deref().and_then(oxy_render::GlassMaterial::from_key).is_some());
+        let undock = widgets_labelled(&mut ed, &ctx, "Undock")[0].center();
+        click_at(&mut ed, &ctx, undock);
+        assert_eq!(ed.menu_docks[DockMenu::Materials as usize], None);
+        assert!(widgets_labelled(&mut ed, &ctx, "Undock").is_empty());
+    }
+
+    #[test]
+    fn a_command_does_not_close_the_docked_mask_menu() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        let menu = widgets_labelled(&mut ed, &ctx, "Mask")[0].center();
+        click_at(&mut ed, &ctx, menu);
+        let dock_left = widgets_labelled(&mut ed, &ctx, "Dock left")[0].center();
+        click_at(&mut ed, &ctx, dock_left);
+        assert_eq!(ed.menu_docks[DockMenu::Mask as usize], Some(PanelSide::Left));
+        let invert_label = tips::menu_text_km(&ed.keymap, "Invert", Cmd::InvertMask);
+        let invert = widgets_labelled(&mut ed, &ctx, &invert_label)[0].center();
+        click_at(&mut ed, &ctx, invert);
+        assert!(ed.scene.active().mesh.mask.iter().all(|&weight| weight == 1.0));
+        assert!(!widgets_labelled(&mut ed, &ctx, &invert_label).is_empty());
+    }
+
+    #[test]
+    fn a_dock_tray_leaves_room_for_the_viewport_in_a_small_window() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.inspector_width = 420.0;
+        let ctx = egui::Context::default();
+        menu_dock::place(&ctx, &mut ed, DockMenu::Materials, PanelSide::Left);
+        let (width, height) = crate::settings::WindowGeometry::MIN;
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+        let mut canvas = egui::Rect::NOTHING;
+        for _ in 0..6 {
+            let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                canvas = draw(ui, &mut ed).1;
+            });
+            out.textures_delta.clear();
+        }
+        assert!(canvas.width() >= 100.0, "remaining viewport width: {}", canvas.width());
+        assert_eq!(ed.inspector_width, 420.0);
     }
 
     #[test]
