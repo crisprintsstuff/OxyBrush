@@ -59,6 +59,7 @@ struct Piece {
     // rgb: the Tint look's color (linear)
     inactive_color: vec4<f32>,
     glass_tint: vec4<f32>,
+    // x: roughness, y: encoded frost seed, z: absorption per scene unit
     glass_surface: vec4<f32>,
 };
 
@@ -644,6 +645,23 @@ struct GlassViewport {
 @group(2) @binding(0) var<uniform> glass_view: GlassViewport;
 @group(2) @binding(1) var glass_scene: texture_2d<f32>;
 @group(2) @binding(2) var glass_scene_depth: texture_2d<f32>;
+@group(2) @binding(3) var glass_exit_depth: texture_2d<f32>;
+
+struct GlassBack {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) view_depth: f32,
+};
+
+@vertex
+fn vs_glass_back(v: VsIn) -> GlassBack {
+    let pos = vec4<f32>(v.position, 1.0);
+    return GlassBack(u.view_proj * pos, -(u.view * pos).z);
+}
+
+@fragment
+fn fs_glass_back(i: GlassBack) -> @location(0) f32 {
+    return i.view_depth;
+}
 
 fn glass_behind(pixel: vec2<f32>, fallback: vec2<f32>, depth: f32) -> vec3<f32> {
     let lo = glass_view.rect.xy;
@@ -717,7 +735,18 @@ fn fs_glass(i: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f
     let reflected = reflect(-view, n);
     let studio = mix(0.16, 0.8, smoothstep(-0.45, 0.65, reflected.y));
     let key = pow(max(dot(reflected, normalize(vec3<f32>(-0.35, 0.55, 0.65))), 0.0), mix(110.0, 8.0, roughness));
-    var color = mix(transmitted * piece.glass_tint.rgb, vec3<f32>(studio + key), reflection);
+    var tint = piece.glass_tint.rgb;
+    if (front && piece.glass_surface.z > 0.0) {
+        let exit_depth = textureLoad(glass_exit_depth, vec2<i32>(i.clip.xy), 0).r;
+        let axial_thickness = exit_depth - i.view_depth;
+        if (exit_depth != 0.0 && axial_thickness > 0.00001) {
+            // Approximate the path through one shell along the view ray.
+            // Beer–Lambert transmittance uses the picked tint at one unit.
+            let path = axial_thickness / max(view.z, 0.25);
+            tint = pow(tint, vec3<f32>(path * piece.glass_surface.z));
+        }
+    }
+    var color = mix(transmitted * tint, vec3<f32>(studio + key), reflection);
     color = mix(color, color * u.mask_color.rgb, clamp(i.mask, 0.0, 1.0) * u.params.y);
     return vec4<f32>(color, 1.0);
 }
